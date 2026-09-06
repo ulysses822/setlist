@@ -272,7 +272,9 @@ async fn pull_playlist(
 #[tauri::command(async)]
 fn list_local_playlists(app: tauri::AppHandle) -> Result<Vec<LocalPlaylist>, String> {
     let cfg = config::load(&app)?;
-    spotify::list_local(config::resolve_data_dir(&cfg)?, config::staging_dir(&app)?)
+    let data_dir = config::resolve_data_dir(&cfg)?;
+    let staging = config::staging_dir(&data_dir)?;
+    spotify::list_local(data_dir, staging)
 }
 
 #[tauri::command(async)]
@@ -291,12 +293,14 @@ fn stage_playlist(
     description: Option<String>,
     tracks: Vec<TrackEntry>,
 ) -> Result<(), String> {
-    spotify::stage_local(config::staging_dir(&app)?, file, name, description, tracks)
+    let data_dir = config::resolve_data_dir(&config::load(&app)?)?;
+    spotify::stage_local(config::staging_dir(&data_dir)?, file, name, description, tracks)
 }
 
 #[tauri::command(async)]
 fn get_staged(app: tauri::AppHandle, file: String) -> Result<Option<spotify::StagedEdit>, String> {
-    spotify::get_staged(config::staging_dir(&app)?, file)
+    let data_dir = config::resolve_data_dir(&config::load(&app)?)?;
+    spotify::get_staged(config::staging_dir(&data_dir)?, file)
 }
 
 /// Every non-archived playlist with its effective (staged-or-canonical) tracks — for the
@@ -305,12 +309,14 @@ fn get_staged(app: tauri::AppHandle, file: String) -> Result<Option<spotify::Sta
 fn read_all_playlists(app: tauri::AppHandle) -> Result<Vec<spotify::NamedPlaylist>, String> {
     let cfg = config::load(&app)?;
     let data_dir = config::resolve_data_dir(&cfg)?;
-    spotify::read_all_local(data_dir, config::staging_dir(&app)?)
+    let staging = config::staging_dir(&data_dir)?;
+    spotify::read_all_local(data_dir, staging)
 }
 
 #[tauri::command(async)]
 fn clear_staged(app: tauri::AppHandle, file: String) -> Result<(), String> {
-    spotify::clear_staged(config::staging_dir(&app)?, file)
+    let data_dir = config::resolve_data_dir(&config::load(&app)?)?;
+    spotify::clear_staged(config::staging_dir(&data_dir)?, file)
 }
 
 #[tauri::command(async)]
@@ -345,7 +351,7 @@ async fn delete_playlist(
     file: String,
 ) -> Result<(), String> {
     let (client_id, data_dir) = require_client_id_and_data_dir(&app)?;
-    let staging_dir = config::staging_dir(&app)?;
+    let staging_dir = config::staging_dir(&data_dir)?;
     spotify::delete_playlist(&state, client_id, data_dir, staging_dir, file).await
 }
 
@@ -374,7 +380,8 @@ async fn follow_playlist(
 fn track_playlists(app: tauri::AppHandle, track_ids: Vec<String>) -> Result<Vec<String>, String> {
     let cfg = config::load(&app)?;
     let data_dir = config::resolve_data_dir(&cfg)?;
-    spotify::playlists_containing(data_dir, config::staging_dir(&app)?, track_ids)
+    let staging = config::staging_dir(&data_dir)?;
+    spotify::playlists_containing(data_dir, staging, track_ids)
 }
 
 #[tauri::command(async)]
@@ -415,7 +422,7 @@ async fn push_playlist(
     strategy: spotify::PushStrategy,
 ) -> Result<PushResult, String> {
     let (client_id, data_dir) = require_client_id_and_data_dir(&app)?;
-    let staging = config::staging_dir(&app)?;
+    let staging = config::staging_dir(&data_dir)?;
     spotify::push_playlist(
         &state, client_id, data_dir, staging, file, name, description, tracks, strategy,
     )
@@ -544,6 +551,19 @@ pub fn run() {
             use tauri::Manager;
             // Let the backend push rate-limit events to the UI (no polling).
             app.state::<AppState>().attach_app(app.handle().clone());
+            // Staged edits used to live in the app's config dir. Move any that are still
+            // there into the configured data folder, once. Silent by design: a user with no
+            // data folder set yet has nothing staged either.
+            if let Ok(cfg) = config::load(app.handle()) {
+                if let Ok(data_dir) = config::resolve_data_dir(&cfg) {
+                    if let (Ok(legacy), Ok(current)) = (
+                        config::legacy_staging_dir(app.handle()),
+                        config::staging_dir(&data_dir),
+                    ) {
+                        config::migrate_legacy_staging(&legacy, &current);
+                    }
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

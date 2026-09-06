@@ -134,6 +134,7 @@ The app repo holds only code. Everything personal lives in the data folder you c
 | `playlists/*.json` | Source of truth — one pretty-printed, diff-friendly file per playlist (content only) |
 | `archived.json`, `pinned.json` | Curation state |
 | `history/plays.jsonl` | Append-only listening log |
+| `staged/` | Saved-but-unpushed edits, git-ignored — drafts waiting for a push |
 | `cache/` | Derived/rebuildable, git-ignored — audio features and `sync-meta.json` (per-playlist snapshot id, last-synced time, cover URL) |
 
 Because the data folder is a git repo, Setlist versions it **for you** — no terminal
@@ -149,21 +150,20 @@ Credential Manager) — and the webview runs under a strict CSP.
 
 ## Uninstalling
 
-The uninstaller offers one checkbox — *Delete settings, unpushed edits and the saved Spotify
-login*. Ticked, it removes three things:
+The uninstaller offers one checkbox — *Delete settings and the saved Spotify login*. Ticked,
+it removes three things:
 
 | | |
 |---|---|
-| `%APPDATA%\com.setlist.app` | Your Client ID, the data-folder path, and `staged/` — where **Save** puts edits you haven't pushed yet |
+| `%APPDATA%\com.setlist.app` | Your Client ID and the data-folder path |
 | `%LOCALAPPDATA%\com.setlist.app` | The WebView2 profile, which holds per-playlist column layouts, mood goals, the theme choice and the frozen similarity-map axes |
 | Windows Credential Manager | The Spotify refresh tokens |
 
-**Your data folder is never touched.** Playlists, history and cache are yours and stay exactly
-where they are, uninstall or not.
+**Your data folder is never touched.** Playlists, history, cache and unpushed edits are yours
+and stay exactly where they are, uninstall or not — reinstall and Setlist picks up mid-edit.
 
-But push anything you care about first. Staged edits and mood goals live outside that folder,
-so they are not in your git repo and they go with the checkbox. Leave it unticked and all of it
-survives a reinstall.
+The one thing worth knowing: mood goals and column layouts are held by the webview, so they go
+with the checkbox even though the rest of your curation survives.
 
 ## Good to know
 

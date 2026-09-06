@@ -398,22 +398,34 @@ fn compose_message(details: &[ChangeDetail]) -> String {
 
 // --- commit & push ----------------------------------------------------------
 
-/// Ensure `.gitignore` excludes the rebuildable feature cache, so `git add -A` never
-/// commits it. No-op once the rule is present.
+/// Ensure `.gitignore` excludes what `git add -A` must never pick up: the rebuildable
+/// feature cache, and staged edits, which are drafts rather than a synced state worth
+/// committing. Each rule is added independently, so a repo that already ignores one still
+/// gains the other. No-op once both are present.
 fn ensure_cache_ignored(dir: &Path) -> Result<(), String> {
+    const RULES: [(&str, &str); 2] = [
+        ("cache", "# Derived audio-feature cache — rebuildable, keep out of git"),
+        ("staged", "# Saved-but-unpushed edits — drafts, not a state to commit"),
+    ];
     let gi = dir.join(".gitignore");
     let existing = std::fs::read_to_string(&gi).unwrap_or_default();
-    if existing
-        .lines()
-        .any(|l| matches!(l.trim(), "cache/" | "/cache/" | "cache"))
-    {
+    let mut next = existing.clone();
+    for (name, comment) in RULES {
+        let present = existing.lines().any(|l| {
+            let t = l.trim();
+            t == name || t == format!("{name}/") || t == format!("/{name}/")
+        });
+        if present {
+            continue;
+        }
+        if !next.is_empty() && !next.ends_with('\n') {
+            next.push('\n');
+        }
+        next.push_str(&format!("{comment}\n{name}/\n"));
+    }
+    if next == existing {
         return Ok(());
     }
-    let mut next = existing;
-    if !next.is_empty() && !next.ends_with('\n') {
-        next.push('\n');
-    }
-    next.push_str("# Derived audio-feature cache — rebuildable, keep out of git\ncache/\n");
     std::fs::write(&gi, next).map_err(|e| format!("Couldn't update .gitignore: {e}"))
 }
 
@@ -786,6 +798,31 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&work);
         let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn gitignore_gains_both_rules_without_disturbing_an_existing_one() {
+        let dir = std::env::temp_dir().join(format!(
+            "setlist-ignore-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // A repo that already ignores the cache must still pick up the staged rule.
+        std::fs::write(dir.join(".gitignore"), "cache/
+").unwrap();
+        ensure_cache_ignored(&dir).unwrap();
+        let gi = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert_eq!(gi.matches("cache/").count(), 1, "cache rule duplicated: {gi}");
+        assert!(gi.contains("staged/"), "staged rule missing: {gi}");
+
+        // And running again changes nothing.
+        let before = gi;
+        ensure_cache_ignored(&dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join(".gitignore")).unwrap(), before);
     }
 
     #[test]
