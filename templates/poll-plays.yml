@@ -1,0 +1,46 @@
+name: Poll recently played
+
+# Logs your Spotify listening history into history/plays.jsonl without the desktop app
+# needing to be open. Runs every 30 min; also runnable on demand.
+on:
+  schedule:
+    - cron: "*/30 * * * *" # every 30 minutes (GitHub cron is best-effort; the 50-track buffer covers drift)
+  workflow_dispatch: {}
+
+# Prevent overlapping runs from racing on the same file.
+concurrency:
+  group: poll-plays
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a full commit SHA, not a mutable tag: a hijacked tag (cf. the tj-actions
+      # compromise) must not be able to inject code into a job that holds the Spotify
+      # secrets. Nothing updates this pin automatically; do it by hand.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      # No setup-node and no npx: the poller is dependency-free plain Node ESM, run with the
+      # runner's built-in Node 20. Nothing is fetched from npm in this secret-bearing job.
+      - name: Append new plays
+        env:
+          SPOTIFY_CLIENT_ID: ${{ secrets.SPOTIFY_CLIENT_ID }}
+          SPOTIFY_REFRESH_TOKEN: ${{ secrets.SPOTIFY_REFRESH_TOKEN }}
+          SPOTIFY_CLIENT_SECRET: ${{ secrets.SPOTIFY_CLIENT_SECRET }}
+        run: node scripts/poll-plays.mjs
+
+      - name: Commit history if changed
+        run: |
+          if [[ -n "$(git status --porcelain history/plays.jsonl)" ]]; then
+            git config user.name "setlist-bot"
+            git config user.email "setlist-bot@users.noreply.github.com"
+            git add history/plays.jsonl
+            git commit -m "chore(history): log recently played [skip ci]"
+            git push
+          else
+            echo "No history changes."
+          fi

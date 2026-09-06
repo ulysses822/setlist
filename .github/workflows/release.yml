@@ -1,0 +1,65 @@
+name: Release
+
+# Builds the Windows installers on a v* tag and drafts a release with them attached, so the
+# published binary and the source it came from are the same commit. Assets live on the
+# Releases page; none of them are committed here.
+#
+# workflow_dispatch runs the same build without publishing. It is also the only CI job that
+# compiles the app.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # create the release and upload assets
+
+defaults:
+  run:
+    shell: bash # available on Windows runners, same as the other workflows
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # A tag that disagrees with the manifests would ship an installer whose filename lies
+      # about its version.
+      - name: Check the tag matches the manifests
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          pkg=$(node -p "require('./package.json').version")
+          crate=$(sed -n '0,/^version = /s/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml)
+          for got in "$conf:tauri.conf.json" "$pkg:package.json" "$crate:Cargo.toml"; do
+            if [ "${got%%:*}" != "$tag" ]; then
+              echo "::error::${got##*:} says ${got%%:*}, tag says $tag"
+              exit 1
+            fi
+          done
+
+      # Rust and Node are preinstalled on the runner, so no setup-* actions: the third-party
+      # surface here stays at the one pinned checkout.
+      #
+      # --ignore-scripts matches audit.yml. esbuild's binary arrives through its platform
+      # optionalDependency rather than its postinstall, so the frontend still builds.
+      - run: npm ci --ignore-scripts
+
+      # Runs tsc + vite build first (tauri.conf.json's beforeBuildCommand), then cargo.
+      - run: npm run tauri build
+
+      # Drafted so the notes can be read before the release is visible. Drop --draft to
+      # publish straight from the tag.
+      - name: Publish the installers
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --draft \
+            --title "Setlist $GITHUB_REF_NAME" \
+            --notes "Windows only, and unsigned -- SmartScreen will ask you to confirm. You also need git on your PATH and your own Spotify Client ID; see the README." \
+            src-tauri/target/release/bundle/nsis/*-setup.exe \
+            src-tauri/target/release/bundle/msi/*.msi

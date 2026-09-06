@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Setlist</title>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <!-- The Spotify Web Playback SDK is injected dynamically by player.tsx, after
+         window.onSpotifyWebPlaybackSDKReady exists — a static tag here runs before the
+         React bundle and the SDK throws "onSpotifyWebPlaybackSDKReady is not defined". -->
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

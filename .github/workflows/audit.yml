@@ -1,0 +1,56 @@
+name: Supply-chain audit
+
+# Fails the build if a known-vulnerable dependency (Cargo or npm) is present, and blocks
+# install-time npm scripts.
+#
+# Both auditors read two things: the lockfiles, and the advisory database. A push that
+# touches neither cannot change the verdict, so the path filters skip source-only commits --
+# the schedule is what catches an advisory published against pins that never moved. (GitHub
+# Actions has no YAML anchors, hence the repeated list. Keep the two copies in step.)
+on:
+  push:
+    branches: [main]
+    paths:
+      - package-lock.json
+      - src-tauri/Cargo.lock
+      - .github/workflows/audit.yml
+  pull_request:
+    paths:
+      - package-lock.json
+      - src-tauri/Cargo.lock
+      - .github/workflows/audit.yml
+  schedule:
+    - cron: "0 9 * * 1" # Mondays 09:00 UTC — catch newly-published advisories against pinned deps
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a full commit SHA, not a mutable tag: a hijacked tag must not be able to
+      # inject code into CI. Nothing bumps these automatically; do it by hand.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # `npm ci` enforces the committed lockfile; `--ignore-scripts` blocks postinstall scripts,
+      # the highest-leverage npm supply-chain vector (our runtime deps don't need them).
+      - run: npm ci --ignore-scripts
+      - run: npm audit --audit-level=high
+
+  cargo-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # ubuntu-latest ships a Rust toolchain; install the auditor pinned to its own lockfile.
+      - run: cargo install cargo-audit --locked
+      # Reads src-tauri/Cargo.lock and checks it against the RustSec advisory DB. Fails on any
+      # unignored vulnerability; unmaintained/unsound advisories (e.g. the Linux-only gtk-rs
+      # stack Tauri still uses) are reported as warnings and don't fail the build.
+      #
+      # quick-xml's RUSTSEC-2026-0194/0195 (fixed in 0.41) are ignored because we can't reach
+      # them: it's pinned transitively by plist -> tauri-utils at ^0.39, so bumping needs a new
+      # Tauri release. It's a build-time config parser, not code shipped in the running app.
+      # Remove these --ignore flags once Tauri's plist dependency moves to quick-xml >= 0.41.
+      - run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
+        working-directory: src-tauri
