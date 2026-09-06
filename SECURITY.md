@@ -30,8 +30,14 @@ a login is in flight, matches the exact callback path, and rejects anything else
 the port. Only one instance runs at a time, because two would rotate each other's refresh
 token and trip Spotify's reuse detection.
 
-CI runs `npm audit` and `cargo audit` on every push and again weekly, `npm ci
---ignore-scripts` blocks install hooks, and Actions are pinned to commit SHAs.
+Every workflow pins its actions to commit SHAs and installs with `npm ci --ignore-scripts`, so
+neither a hijacked action tag nor an npm install hook gets to run in CI. `ci.yml` builds the
+frontend and runs the Rust tests and clippy on every push to `main` and every pull request.
+`audit.yml` runs `npm audit` and `cargo audit` when either lockfile changes, and again every
+Monday — a source-only push doesn't re-run them, because neither auditor reads source; the
+schedule is what catches an advisory published against pins that never moved. Two quick-xml
+advisories (RUSTSEC-2026-0194/0195) are ignored there by name: they sit in Tauri's build-time
+config parser rather than in shipped code, and clearing them needs a new Tauri release.
 
 ## What it doesn't do
 

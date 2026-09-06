@@ -27,6 +27,10 @@ use super::{err, get_json, AppState, CachedToken, Profile, ProfileResp, API};
 
 const REDIRECT_URI: &str = "http://127.0.0.1:8888/callback";
 const LISTEN_ADDR: &str = "127.0.0.1:8888";
+/// The path half of `REDIRECT_URI`, which is the only path the loopback catcher answers on.
+/// A test below asserts the two agree — change one without the other and every callback is
+/// rejected, which looks like a hung login rather than a typo.
+const REDIRECT_PATH: &str = "/callback";
 const AUTH_URL: &str = "https://accounts.spotify.com/authorize";
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
 /// Scopes for the backend's own (main) token. Deliberately excludes `streaming`, which only
@@ -139,7 +143,14 @@ fn wait_for_code(server: &tiny_http::Server, expected_state: &str) -> Result<Str
             Err(e) => return Err(format!("Loopback server error: {e}")),
         };
         let url = request.url().to_string(); // e.g. "/callback?code=...&state=..."
-        let Some(query) = url.split('?').nth(1) else {
+        // Answer only on the registered redirect path, carrying a query. Everything else on
+        // this port — a browser's /favicon.ico, a drive-by page probing localhost — gets the
+        // neutral holding page and is ignored, without disturbing the login in progress.
+        let Some(query) = url
+            .split_once('?')
+            .filter(|(path, _)| *path == REDIRECT_PATH)
+            .map(|(_, query)| query)
+        else {
             let _ = request.respond(tiny_http::Response::from_string("Waiting for Spotify..."));
             continue;
         };
@@ -532,4 +543,20 @@ pub async fn mint_history_token(
     token
         .refresh_token
         .ok_or_else(|| "Spotify did not return a refresh token.".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_listener_path_matches_the_registered_redirect() {
+        // `wait_for_code` answers only on REDIRECT_PATH, while Spotify redirects to whatever
+        // REDIRECT_URI says. If they ever drift apart every callback is silently discarded and
+        // the login just hangs until the five-minute timeout — a failure with no visible cause.
+        assert!(
+            REDIRECT_URI.ends_with(REDIRECT_PATH),
+            "loopback listener answers on {REDIRECT_PATH}, but Spotify redirects to {REDIRECT_URI}"
+        );
+    }
 }
