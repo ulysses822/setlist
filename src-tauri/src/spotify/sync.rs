@@ -11,9 +11,9 @@ use super::{
     PlaylistSummary, PlaylistTrackObj, API,
 };
 use super::store::{
-    existing_file_for, existing_filenames, load_sync_meta, read_playlist_cached, save_sync_meta,
-    sync_meta_of, unique_filename, upsert_sync_meta, write_atomic, write_playlist, PlaylistFile,
-    SyncMeta, TrackEntry,
+    existing_file_for, existing_filenames, load_sync_meta, read_playlist_cached, rename_to_match,
+    save_sync_meta, sync_meta_of, unique_filename, upsert_sync_meta, write_atomic, write_playlist,
+    PlaylistFile, SyncMeta, TrackEntry,
 };
 use super::store::{clear_staged, read_local};
 
@@ -194,6 +194,18 @@ pub async fn pull_playlists(
             tracks,
         };
 
+        // Follow a rename: the filename is minted from the name, so leaving it alone would let
+        // the folder drift out of step with the library. `used_names` has to learn the new name
+        // — a playlist further down the page could otherwise mint it and write over this one —
+        // and can forget the old, which is now free. (Not `write_playlist`: that writes the
+        // sidecar per playlist, and the bulk pull batches it into one write below.)
+        let renamed = rename_to_match(&data_dir, &filename, &model.name);
+        if renamed != filename {
+            used_names.remove(&filename);
+            used_names.insert(renamed.clone());
+        }
+        let filename = renamed;
+
         let json = serde_json::to_string_pretty(&model).map_err(err)?;
         write_atomic(&playlists_dir.join(&filename), &json)?;
         if !model.spotify_id.is_empty() {
@@ -267,7 +279,7 @@ pub async fn pull_one(
         }
     };
 
-    write_playlist(&data_dir, &filename, &model)?;
+    let filename = write_playlist(&data_dir, &filename, &model)?;
 
     Ok(PlaylistSummary {
         spotify_id,
@@ -343,6 +355,9 @@ pub struct SyncStatus {
 pub struct PushResult {
     /// "applied" or "conflict".
     pub status: String,
+    /// The file the playlist lives in now. A pushed rename renames the file to match, so the
+    /// editor has to re-point at it — otherwise the next read asks for a file that's gone.
+    pub file: String,
     pub playlist: Option<PlaylistFile>,
     pub conflict: Option<SyncStatus>,
     /// A non-fatal note to show after an otherwise-successful push (e.g. Spotify ignored a
@@ -685,10 +700,11 @@ pub async fn push_playlist(
             apply_replace(state, &client_id, &new_pid, &tracks).await?;
         }
         let updated = fetch_one(state, &client_id, &new_pid).await?;
-        write_playlist(&data_dir, &file, &updated)?;
-        clear_staged(staging_dir, file)?;
+        let file = write_playlist(&data_dir, &file, &updated)?;
+        clear_staged(staging_dir, file.clone())?;
         return Ok(PushResult {
             status: "applied".into(),
+            file,
             playlist: Some(updated),
             conflict: None,
             warning: None,
@@ -719,6 +735,7 @@ pub async fn push_playlist(
                 if diverged {
                     return Ok(PushResult {
                         status: "conflict".into(),
+                        file: file.clone(),
                         playlist: None,
                         conflict: Some(status),
                         warning: None,
@@ -768,10 +785,11 @@ pub async fn push_playlist(
                 .to_string()
         },
     );
-    write_playlist(&data_dir, &file, &updated)?;
-    clear_staged(staging_dir, file)?;
+    let file = write_playlist(&data_dir, &file, &updated)?;
+    clear_staged(staging_dir, file.clone())?;
     Ok(PushResult {
         status: "applied".into(),
+        file,
         playlist: Some(updated),
         conflict: None,
         warning,
@@ -801,6 +819,14 @@ async fn update_details(
     Ok(())
 }
 
+/// A playlist and the file it lives in. Re-pulling can move it — a rename on Spotify renames
+/// the local JSON to match — so the two travel together.
+#[derive(Serialize)]
+pub struct PlaylistAt {
+    pub file: String,
+    pub playlist: PlaylistFile,
+}
+
 /// Re-pull a single playlist from Spotify, overwriting the local file. Kept for an
 /// explicit "re-sync from Spotify" action.
 pub async fn refresh_playlist(
@@ -808,11 +834,11 @@ pub async fn refresh_playlist(
     client_id: String,
     data_dir: PathBuf,
     file: String,
-) -> Result<PlaylistFile, String> {
+) -> Result<PlaylistAt, String> {
     let pf = read_local(data_dir.clone(), file.clone())?;
     let updated = fetch_one(state, &client_id, &pf.spotify_id).await?;
-    write_playlist(&data_dir, &file, &updated)?;
-    Ok(updated)
+    let file = write_playlist(&data_dir, &file, &updated)?;
+    Ok(PlaylistAt { file, playlist: updated })
 }
 
 #[cfg(test)]

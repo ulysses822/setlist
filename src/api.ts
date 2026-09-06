@@ -214,10 +214,19 @@ export type PlayerAction = "pause" | "resume" | "next" | "previous" | "seek";
 
 export interface PushResult {
   status: "applied" | "conflict";
+  /** The file the playlist lives in now — a pushed rename renames the file to match. */
+  file: string;
   playlist: PlaylistFile | null;
   conflict: SyncStatus | null;
   /** Non-fatal note after a successful push (e.g. Spotify ignored a description clear). */
   warning: string | null;
+}
+
+/** A playlist and the file it lives in. Re-pulling can move it: a rename on Spotify renames
+ *  the local file to match. */
+export interface PlaylistAt {
+  file: string;
+  playlist: PlaylistFile;
 }
 
 export const api = {
@@ -295,7 +304,7 @@ export const api = {
     strategy: PushStrategy
   ) => invoke<PushResult>("push_playlist", { file, name, description, tracks, strategy }),
   syncStatus: (file: string) => invoke<SyncStatus>("sync_status", { file }),
-  refreshPlaylist: (file: string) => invoke<PlaylistFile>("refresh_playlist", { file }),
+  refreshPlaylist: (file: string) => invoke<PlaylistAt>("refresh_playlist", { file }),
   trackFeatures: (tracks: TrackEntry[]) =>
     invoke<Record<string, Features>>("track_features", { tracks }),
 

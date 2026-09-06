@@ -6,8 +6,8 @@ mod spotify;
 
 use config::AppConfig;
 use spotify::{
-    AppState, LocalPlaylist, LocalTrackHit, PlaylistFile, PlaylistSummary, Profile, PushResult,
-    SearchResult, SyncStatus, TrackEntry,
+    AppState, LocalPlaylist, LocalTrackHit, PlaylistAt, PlaylistFile, PlaylistSummary, Profile,
+    PushResult, SearchResult, SyncStatus, TrackEntry,
 };
 
 /// Load config and require a non-empty Spotify client id. Almost every Spotify-touching command
@@ -537,7 +537,7 @@ async fn refresh_playlist(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     file: String,
-) -> Result<PlaylistFile, String> {
+) -> Result<PlaylistAt, String> {
     let (client_id, data_dir) = require_client_id_and_data_dir(&app)?;
     spotify::refresh_playlist(&state, client_id, data_dir, file).await
 }

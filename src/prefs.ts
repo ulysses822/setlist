@@ -30,9 +30,11 @@ let goals: Goals = {};
 let ui: UiState = {};
 let loaded = false;
 
-/** Load both stores. Call before rendering anything that reads them, and again whenever the
- *  data folder changes. Failure leaves the defaults in place — an unconfigured data folder is
- *  the normal first-run state, not an error. */
+/** Load both stores. Call before rendering anything that reads them, whenever the data folder
+ *  changes, and after anything that can rename a playlist file: renaming re-keys both stores
+ *  on disk, and a write from a stale cache would put the old key straight back. Failure leaves
+ *  the defaults in place — an unconfigured data folder is the normal first-run state, not an
+ *  error. */
 export async function loadPrefs(): Promise<void> {
   try {
     const [g, u] = await Promise.all([api.getGoals(), api.getUiState()]);

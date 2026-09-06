@@ -196,6 +196,9 @@ function App() {
       const result = await api.pullPlaylists();
       setPlaylists(result);
       git?.refresh(); // pulled files change the data repo
+      // A playlist renamed on Spotify renames its file, and the goal/column stores are keyed
+      // by that name; the backend moves the entries, so re-read them over the cached copy.
+      await prefs.loadPrefs();
       const skipped = result.filter((p) => p.error).length;
       const pulled = result.length - skipped;
       const firstError = result.find((p) => p.error)?.error;
@@ -245,6 +248,7 @@ function App() {
         prev.map((row) => (row.spotify_id === p.spotify_id ? summary : row))
       );
       git?.refresh(); // pulled file changes the data repo
+      await prefs.loadPrefs(); // the pull may have renamed the file its goal/columns are keyed by
       setStatus({ kind: "ok", msg: `Pulled "${summary.name}" (${summary.track_count} tracks)` });
     } catch (e) {
       setStatus({ kind: "err", msg: String(e) });

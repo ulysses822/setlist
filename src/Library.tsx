@@ -517,6 +517,16 @@ export default function Library() {
     }
   }
 
+  // A playlist's file is named after the playlist, so pulling or pushing a rename moves it
+  // out from under the open editor. Re-point at where it landed, and re-read the goal and
+  // column stores — the backend moved this playlist's entries to the new key and prefs holds
+  // both in memory, so a later save from the stale copy would undo that.
+  async function followRename(file: string) {
+    if (file === selected) return;
+    setSelected(file);
+    await prefs.loadPrefs();
+  }
+
   // Pull Spotify's current version into the canonical mirror (discards local edits).
   async function pullRemote() {
     if (!selected) return;
@@ -533,8 +543,9 @@ export default function Library() {
     setStatus(null);
     try {
       await api.clearStaged(selected);
-      const pf = await api.refreshPlaylist(selected);
+      const { file, playlist: pf } = await api.refreshPlaylist(selected);
       if (ticket !== openTicket.current) return; // user opened another playlist meanwhile
+      await followRename(file);
       setDraft(pf);
       markPersisted(pf.name, pf.description, pf.tracks);
       canonicalRef.current = persistedRef.current;
@@ -1007,6 +1018,7 @@ export default function Library() {
         return;
       }
       if (res.playlist) {
+        await followRename(res.file);
         setDraft(res.playlist);
         markPersisted(res.playlist.name, res.playlist.description, res.playlist.tracks);
         canonicalRef.current = persistedRef.current;

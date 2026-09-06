@@ -138,12 +138,22 @@ fn hydrate_sync_meta(data_dir: &Path, pf: &mut PlaylistFile) {
 
 /// Persist a playlist: the content-only committed JSON plus its volatile sync metadata in the
 /// sidecar. Single-write callers use this; the bulk pull batches the sidecar itself.
-pub(crate) fn write_playlist(data_dir: &Path, file: &str, model: &PlaylistFile) -> Result<(), String> {
+///
+/// Returns the file the playlist is stored under, which is not always the one passed in — a
+/// renamed playlist takes its file with it. Callers holding the old name (the open editor, a
+/// staged edit about to be cleared) have to use the returned one.
+pub(crate) fn write_playlist(
+    data_dir: &Path,
+    file: &str,
+    model: &PlaylistFile,
+) -> Result<String, String> {
+    let file = rename_to_match(data_dir, file, &model.name);
     write_atomic(
-        &playlist_path(data_dir, file)?,
+        &playlist_path(data_dir, &file)?,
         &serde_json::to_string_pretty(model).map_err(err)?,
     )?;
-    upsert_sync_meta(data_dir, &model.spotify_id, sync_meta_of(model))
+    upsert_sync_meta(data_dir, &model.spotify_id, sync_meta_of(model))?;
+    Ok(file)
 }
 
 /// Read + parse a playlist JSON through an (mtime, size)-validated in-memory cache.
@@ -258,6 +268,103 @@ fn slugify(name: &str) -> String {
         "playlist".to_string()
     } else {
         joined
+    }
+}
+
+/// True when `file` is the name this playlist would be given today: the slug of its name,
+/// optionally with the `-N` tie-break suffix `unique_filename` adds. Without the suffix arm,
+/// two playlists both called "Jazz" would fight over `jazz.json` on every single pull.
+fn filename_matches(file: &str, name: &str) -> bool {
+    let stem = file.strip_suffix(".json").unwrap_or(file);
+    let base = slugify(name);
+    stem == base
+        || stem
+            .strip_prefix(&base)
+            .and_then(|rest| rest.strip_prefix('-'))
+            .is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// Keep a playlist's filename in step with its name, and return the file it lives in now.
+///
+/// The filename is minted from the name the first time we see a playlist and then reused
+/// forever (identity is the Spotify id, not the path), so without this the folder ends up
+/// answering to names the library no longer uses. The data repo records the move as a rename.
+///
+/// Best-effort throughout: a playlist that can't be moved stays where it is rather than
+/// failing the sync that triggered it.
+pub(crate) fn rename_to_match(data_dir: &Path, file: &str, name: &str) -> String {
+    let keep = || file.to_string();
+    if filename_matches(file, name) {
+        return keep();
+    }
+    let playlists_dir = data_dir.join("playlists");
+    let Ok(from) = playlist_path(data_dir, file) else {
+        return keep();
+    };
+    if !from.exists() {
+        return keep(); // first write of a new playlist: nothing to move
+    }
+    let Ok(mut used) = existing_filenames(&playlists_dir) else {
+        return keep();
+    };
+    let new_file = unique_filename(name, &mut used);
+    let Ok(to) = playlist_path(data_dir, &new_file) else {
+        return keep();
+    };
+    if std::fs::rename(&from, &to).is_err() {
+        return keep();
+    }
+    move_keyed_state(data_dir, file, &new_file);
+    new_file
+}
+
+/// Carry everything keyed by a playlist's filename across a rename: its staged edit, its place
+/// in the archive and pin lists, its mood goal, and its column choice. Goals and columns are
+/// written by the webview, which caches both — it reloads them after an operation that can
+/// rename (see `prefs.ts`) so a later save can't put the old key back.
+fn move_keyed_state(data_dir: &Path, from: &str, to: &str) {
+    if let Ok(staging) = crate::config::staging_dir(data_dir) {
+        let draft = staging.join(from);
+        if draft.exists() {
+            let _ = std::fs::rename(draft, staging.join(to));
+        }
+    }
+
+    let mut archived = load_archived(data_dir);
+    if archived.remove(from) {
+        archived.insert(to.to_string());
+        let _ = save_archived(data_dir, &archived);
+    }
+    let mut pinned = load_pinned(data_dir);
+    if pinned.remove(from) {
+        pinned.insert(to.to_string());
+        let _ = save_pinned(data_dir, &pinned);
+    }
+
+    let mut goals = load_goals(data_dir);
+    if move_key(goals.as_object_mut(), from, to) {
+        let _ = save_goals(data_dir, &goals);
+    }
+    let mut ui = load_ui_state(data_dir);
+    if move_key(ui.get_mut("cols").and_then(|c| c.as_object_mut()), from, to) {
+        let _ = save_ui_state(data_dir, &ui);
+    }
+}
+
+/// Re-key one entry of a JSON object in place. False (nothing written) when there's no such
+/// entry, or when the store isn't the object shape we expect.
+fn move_key(
+    obj: Option<&mut serde_json::Map<String, serde_json::Value>>,
+    from: &str,
+    to: &str,
+) -> bool {
+    let Some(obj) = obj else { return false };
+    match obj.remove(from) {
+        Some(value) => {
+            obj.insert(to.to_string(), value);
+            true
+        }
+        None => false,
     }
 }
 
@@ -641,7 +748,7 @@ pub fn create_local(
     let playlists_dir = data_dir.join("playlists");
     std::fs::create_dir_all(&playlists_dir).map_err(err)?;
     let mut used = existing_filenames(&playlists_dir)?;
-    let filename = unique_filename(&name, &mut used);
+    let mut filename = unique_filename(&name, &mut used);
 
     let model = PlaylistFile {
         spotify_id: String::new(), // not on Spotify yet
@@ -652,7 +759,7 @@ pub fn create_local(
         cover_url: None,
         tracks: Vec::new(),
     };
-    write_playlist(&data_dir, &filename, &model)?;
+    filename = write_playlist(&data_dir, &filename, &model)?;
 
     Ok(LocalPlaylist {
         file: filename,
@@ -729,10 +836,24 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("setlist-store-{tag}-{nanos}"));
-        std::fs::create_dir_all(root.join("data").join("playlists")).unwrap();
-        std::fs::create_dir_all(root.join("staged")).unwrap();
-        (root.join("data"), root.join("staged"))
+        let data = std::env::temp_dir().join(format!("setlist-store-{tag}-{nanos}"));
+        std::fs::create_dir_all(data.join("playlists")).unwrap();
+        // Same layout as production: staging is `<data_dir>/staged`, which is where a rename
+        // goes looking for the draft it has to carry across.
+        let staged = crate::config::staging_dir(&data).unwrap();
+        (data, staged)
+    }
+
+    fn playlist(spotify_id: &str, name: &str, tracks: Vec<TrackEntry>) -> PlaylistFile {
+        PlaylistFile {
+            spotify_id: spotify_id.into(),
+            name: name.into(),
+            description: String::new(),
+            snapshot_id: String::new(),
+            last_synced: String::new(),
+            cover_url: None,
+            tracks,
+        }
     }
 
     #[test]
@@ -833,5 +954,62 @@ mod tests {
         assert!(listed[0].modified, "the dot must survive a staged file we can't read");
         assert_eq!(listed[0].name, "Mixtape");
         assert_eq!(listed[0].track_count, 1);
+    }
+
+    #[test]
+    fn a_renamed_playlist_takes_its_file_and_its_saved_state_with_it() {
+        let (data_dir, staging_dir) = temp_dirs("rename");
+        write_playlist(&data_dir, "jog.json", &playlist("pid1", "Jogging Music", vec![])).unwrap();
+
+        stage_local(staging_dir.clone(), "jog.json".into(), None, None, vec![track("a")]).unwrap();
+        set_archived(data_dir.clone(), "jog.json".into(), true).unwrap();
+        set_pinned(data_dir.clone(), "jog.json".into(), true).unwrap();
+        save_goals(&data_dir, &serde_json::json!({ "jog.json": { "valence": 0.8 } })).unwrap();
+        save_ui_state(&data_dir, &serde_json::json!({ "cols": { "jog.json": ["tempo"] } })).unwrap();
+
+        let file =
+            write_playlist(&data_dir, "jog.json", &playlist("pid1", "Favourite Beats", vec![]))
+                .unwrap();
+
+        assert_eq!(file, "favourite-beats.json");
+        assert!(!data_dir.join("playlists").join("jog.json").exists());
+        assert!(data_dir.join("playlists").join(&file).exists());
+        assert!(staging_dir.join(&file).exists(), "the unpushed draft moved too");
+        assert!(!staging_dir.join("jog.json").exists());
+        assert!(load_archived(&data_dir).contains(&file));
+        assert!(load_pinned(&data_dir).contains(&file));
+        assert_eq!(load_goals(&data_dir)["favourite-beats.json"]["valence"], 0.8);
+        assert_eq!(
+            load_ui_state(&data_dir)["cols"]["favourite-beats.json"],
+            serde_json::json!(["tempo"])
+        );
+    }
+
+    #[test]
+    fn a_tie_break_suffix_is_not_treated_as_a_drifted_name() {
+        let (data_dir, _staging) = temp_dirs("tie-break");
+        write_playlist(&data_dir, "jazz.json", &playlist("pid1", "Jazz", vec![])).unwrap();
+        write_playlist(&data_dir, "jazz-2.json", &playlist("pid2", "Jazz", vec![])).unwrap();
+
+        // The second playlist is genuinely called "Jazz" too; its `-2` is how they were told
+        // apart, not drift. Re-syncing it must leave it alone rather than start a fight over
+        // `jazz.json` that churns the repo on every pull.
+        let file = write_playlist(&data_dir, "jazz-2.json", &playlist("pid2", "Jazz", vec![]))
+            .unwrap();
+        assert_eq!(file, "jazz-2.json");
+        assert!(data_dir.join("playlists").join("jazz.json").exists());
+    }
+
+    #[test]
+    fn renaming_onto_a_taken_name_takes_the_next_one() {
+        let (data_dir, _staging) = temp_dirs("collide");
+        write_playlist(&data_dir, "rock.json", &playlist("pid1", "Rock", vec![])).unwrap();
+        write_playlist(&data_dir, "jog.json", &playlist("pid2", "Jogging Music", vec![])).unwrap();
+
+        let file = write_playlist(&data_dir, "jog.json", &playlist("pid2", "Rock", vec![])).unwrap();
+
+        assert_eq!(file, "rock-2.json");
+        let untouched = std::fs::read_to_string(data_dir.join("playlists").join("rock.json")).unwrap();
+        assert!(untouched.contains("pid1"), "the playlist already called Rock must not be hit");
     }
 }

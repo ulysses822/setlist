@@ -131,7 +131,7 @@ The app repo holds only code. Everything personal lives in the data folder you c
 
 | Path (data repo) | What it is |
 |------|------|
-| `playlists/*.json` | Source of truth — one pretty-printed, diff-friendly file per playlist (content only) |
+| `playlists/*.json` | Source of truth — one pretty-printed, diff-friendly file per playlist (content only), named after the playlist and renamed with it |
 | `archived.json`, `pinned.json`, `goals.json` | Curation state — archived/pinned lists and per-playlist mood goals |
 | `history/plays.jsonl` | Append-only listening log |
 | `staged/` | Saved-but-unpushed edits, git-ignored — drafts waiting for a push |
