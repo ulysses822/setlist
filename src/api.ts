@@ -8,6 +8,10 @@ export interface AppConfig {
 export interface Profile {
   id: string;
   display_name: string | null;
+  /** Set when the streaming-only grant didn't complete: the login worked, but there is no
+   *  playback token and the built-in player stays dead until you reconnect. Never falls back
+   *  to the app's full-scope token — the webview is only ever given a streaming-scoped one. */
+  streaming_error: string | null;
 }
 
 export interface PlaylistSummary {

@@ -170,7 +170,19 @@ function App() {
       const p = await api.login();
       setProfile(p);
       setConnected(true);
-      setStatus({ kind: "ok", msg: `Connected as ${p.display_name ?? p.id}` });
+      const who = p.display_name ?? p.id;
+      // The second, playback-only authorization can fail on its own. Everything else is
+      // connected, so this isn't a failed login — but it has to be said out loud, because the
+      // player will refuse rather than quietly fall back to the full-scope token. Reported as
+      // an error so it stays on screen until dismissed.
+      setStatus(
+        p.streaming_error
+          ? {
+              kind: "err",
+              msg: `Connected as ${who}, but in-app playback wasn't authorized — click Connect Spotify again to retry it. (${p.streaming_error})`,
+            }
+          : { kind: "ok", msg: `Connected as ${who}` }
+      );
     } catch (e) {
       setStatus({ kind: "err", msg: String(e) });
     } finally {

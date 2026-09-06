@@ -200,6 +200,11 @@ pub(crate) struct CachedToken {
 pub struct Profile {
     pub id: String,
     pub display_name: Option<String>,
+    /// Set when the second, streaming-only authorization didn't complete. The login itself
+    /// succeeded and every non-playback feature works; the built-in player does not, because
+    /// the webview is given no token at all rather than the full-scope one (see
+    /// `auth::ensure_streaming_token`). Reconnecting retries the grant.
+    pub streaming_error: Option<String>,
 }
 
 #[derive(Serialize)]

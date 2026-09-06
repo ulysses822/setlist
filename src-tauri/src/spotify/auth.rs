@@ -11,6 +11,10 @@
 //! - the **streaming** family carries only what the Web Playback SDK needs and is the only
 //!   token ever handed to the webview (see `ensure_streaming_token`), so a compromised
 //!   frontend can play music but can't read or modify playlists.
+//!
+//! The separation holds unconditionally: there is no path by which a main-family token
+//! reaches the webview. When the streaming grant is missing, playback fails and says so
+//! rather than borrowing the main token.
 
 use std::time::{Duration, Instant};
 
@@ -277,14 +281,22 @@ pub(crate) async fn ensure_token(state: &AppState, client_id: &str) -> Result<St
     Ok(value)
 }
 
+/// What the webview is told when we have no streaming grant to give it. Playback is the only
+/// thing affected; every other feature runs off the main token, which stays in this process.
+pub(crate) const NO_STREAMING_GRANT: &str =
+    "In-app playback isn't authorized yet — open Setup and click Connect Spotify to grant it. \
+     Everything else works without it.";
+
 /// Return a valid **streaming-scoped** access token — the only token ever exposed to the
 /// webview (the Web Playback SDK needs one, and handing it the full-scope main token would
 /// let any script in the webview modify playlists). Same single-flight refresh pattern as
 /// `ensure_token`, against its own keychain entry.
 ///
-/// Installs that connected before the streaming family existed have no streaming refresh
-/// token yet; their main grant still carries `streaming`, so fall back to it — playback
-/// keeps working, and the next Connect mints the narrow token.
+/// There is deliberately **no fallback to the main token**. A missing streaming entry means
+/// the second authorization in `login` never completed, and the honest answer is that the
+/// player is unavailable until the user reconnects. Quietly substituting the main token would
+/// hand the webview `playlist-modify-*` to spare it an error message, turning the one security
+/// boundary this app advertises into something that fails open without saying so.
 pub(crate) async fn ensure_streaming_token(
     state: &AppState,
     client_id: &str,
@@ -296,10 +308,8 @@ pub(crate) async fn ensure_streaming_token(
         }
     }
 
-    let Some(refresh) = load_refresh_token(KEYRING_USER_STREAMING)? else {
-        drop(guard); // release before taking the main-token lock — never hold both
-        return ensure_token(state, client_id).await;
-    };
+    let refresh =
+        load_refresh_token(KEYRING_USER_STREAMING)?.ok_or_else(|| NO_STREAMING_GRANT.to_string())?;
 
     let resp = state
         .http
@@ -390,12 +400,20 @@ pub async fn login(state: &AppState, client_id: String) -> Result<Profile, Strin
 
     // Second, minimal grant for the Web Playback SDK. Its scopes are a subset of what the
     // user just approved, so Spotify auto-redirects without showing another consent screen —
-    // the user sees a second "connected" tab flash by at most. Best-effort: if it fails,
-    // playback falls back to the main token (which for pre-split installs still carries
-    // `streaming`), and the next Connect retries the grant.
-    let _ = mint_streaming_grant(state, &client_id).await;
+    // the user sees a second "connected" tab flash by at most.
+    //
+    // It can still fail (the loopback port is rebound moments after the first flow released
+    // it, the browser handoff can drop, the user can close the tab). That doesn't invalidate
+    // the login we just completed, so it isn't an error — but it is not swallowed either:
+    // without this grant there is no playback token, and `ensure_streaming_token` will refuse
+    // rather than reach for the main one. Report it so the user knows to reconnect instead of
+    // finding a dead player later.
+    let streaming_error = mint_streaming_grant(state, &client_id).await.err();
 
-    get_profile(state, &client_id).await
+    Ok(Profile {
+        streaming_error,
+        ..get_profile(state, &client_id).await?
+    })
 }
 
 /// Mint the streaming-only token family (see `ensure_streaming_token` for why it exists):
@@ -452,6 +470,8 @@ async fn get_profile(state: &AppState, client_id: &str) -> Result<Profile, Strin
     Ok(Profile {
         id: resp.id,
         display_name: resp.display_name,
+        // Filled in by `login`, which is the only place the streaming grant is attempted.
+        streaming_error: None,
     })
 }
 

@@ -21,6 +21,8 @@ The refresh token never touches disk — it goes to the Windows Credential Manag
 `keyring` crate, and the access token stays in memory in the Rust process. The webview never
 sees either one. It gets a separate streaming-scoped token instead, so a compromised renderer
 can control playback but can't read or modify a playlist (`src-tauri/src/spotify/auth.rs`).
+That holds even when the streaming grant is missing: there is no fallback to the main token,
+so a failed grant means the player reports it and stays dead until you reconnect.
 
 The production CSP has no `unsafe-inline`; the dev CSP relaxes `style-src` for Vite's HMR
 (`src-tauri/tauri.conf.json`). The OAuth loopback listener binds `127.0.0.1:8888` only while
