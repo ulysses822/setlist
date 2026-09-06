@@ -147,6 +147,24 @@ Keep that repo **private**: playlists and play history are personal data. Your S
 refresh token never touches disk — it lives in the OS credential manager (Windows
 Credential Manager) — and the webview runs under a strict CSP.
 
+## Uninstalling
+
+The uninstaller offers one checkbox — *Delete settings, unpushed edits and the saved Spotify
+login*. Ticked, it removes three things:
+
+| | |
+|---|---|
+| `%APPDATA%\com.setlist.app` | Your Client ID, the data-folder path, and `staged/` — where **Save** puts edits you haven't pushed yet |
+| `%LOCALAPPDATA%\com.setlist.app` | The WebView2 profile, which holds per-playlist column layouts, mood goals, the theme choice and the frozen similarity-map axes |
+| Windows Credential Manager | The Spotify refresh tokens |
+
+**Your data folder is never touched.** Playlists, history and cache are yours and stay exactly
+where they are, uninstall or not.
+
+But push anything you care about first. Staged edits and mood goals live outside that folder,
+so they are not in your git repo and they go with the checkbox. Leave it unticked and all of it
+survives a reinstall.
+
 ## Good to know
 
 - **Spotify Premium** is required for in-app playback and the device picker; everything
