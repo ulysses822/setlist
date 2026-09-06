@@ -204,7 +204,9 @@ fn changes(dir: &Path) -> Result<Vec<ChangeDetail>, String> {
     }
     let porcelain = String::from_utf8_lossy(&raw.stdout);
 
-    let mut out = Vec::new();
+    // Collect the raw rows first: pairing the two halves of a rename needs to see both before
+    // either is described.
+    let mut rows: Vec<(String, ChangeKind)> = Vec::new();
     for line in porcelain.lines() {
         if line.len() < 4 {
             continue;
@@ -225,8 +227,33 @@ fn changes(dir: &Path) -> Result<Vec<ChangeDetail>, String> {
         } else {
             ChangeKind::Modified
         };
+        rows.push((path, kind));
+    }
 
-        let is_playlist = path.starts_with("playlists/") && path.ends_with(".json");
+    // A playlist file is named after its playlist, so renaming one moves it. Git only reports
+    // that as a rename once it's staged; here, before any `git add`, it arrives as a delete
+    // plus an untracked add. Pair the halves so the panel and the commit message describe one
+    // playlist that moved rather than one removed and another appearing from nowhere.
+    let moved = paired_renames(dir, &rows);
+
+    let mut out = Vec::new();
+    for (path, kind) in rows {
+        if let Some(from) = moved.get(&path) {
+            let (summary, body) = playlist_move(dir, from, &path);
+            out.push(ChangeDetail {
+                path,
+                kind: ChangeKind::Modified,
+                summary,
+                body,
+                is_playlist: true,
+            });
+            continue;
+        }
+        if moved.values().any(|from| *from == path) {
+            continue; // the file it moved out of, already covered by the entry above
+        }
+
+        let is_playlist = is_playlist_path(&path);
         let (summary, body) = if is_playlist {
             playlist_change(dir, &path, kind)
         } else {
@@ -237,11 +264,42 @@ fn changes(dir: &Path) -> Result<Vec<ChangeDetail>, String> {
     Ok(out)
 }
 
+fn is_playlist_path(path: &str) -> bool {
+    path.starts_with("playlists/") && path.ends_with(".json")
+}
+
+/// Match every added playlist file to the deleted one holding the same Spotify id: new path →
+/// old path. A playlist created locally and never pushed has no id, and no committed half to
+/// pair with anyway, so it stays an ordinary addition.
+fn paired_renames(
+    dir: &Path,
+    rows: &[(String, ChangeKind)],
+) -> std::collections::HashMap<String, String> {
+    let mut pairs = std::collections::HashMap::new();
+    let mut vacated: std::collections::HashMap<String, String> = rows
+        .iter()
+        .filter(|(path, kind)| matches!(kind, ChangeKind::Deleted) && is_playlist_path(path))
+        .filter_map(|(path, _)| head_playlist(dir, path).map(|pf| (pf.spotify_id, path.clone())))
+        .filter(|(id, _)| !id.is_empty())
+        .collect();
+    if vacated.is_empty() {
+        return pairs;
+    }
+    for (path, _) in rows.iter().filter(|(p, k)| matches!(k, ChangeKind::Added) && is_playlist_path(p)) {
+        if let Some(from) = working_playlist(dir, path).and_then(|pf| vacated.remove(&pf.spotify_id))
+        {
+            pairs.insert(path.clone(), from);
+        }
+    }
+    pairs
+}
+
 /// Generic one-liner for non-playlist data files.
 fn label_for(path: &str, kind: ChangeKind) -> String {
     let what = match path {
         "archived.json" => "Archived-playlist list",
         "pinned.json" => "Pinned-playlist list",
+        "goals.json" => "Playlist mood goals",
         "history/plays.jsonl" => "Listening history",
         ".github/workflows/poll-plays.yml" => "History-logger workflow",
         "scripts/poll-plays.mjs" => "History-logger script",
@@ -259,17 +317,32 @@ fn verb(kind: ChangeKind) -> &'static str {
     }
 }
 
-/// Read a playlist file at HEAD (committed) and in the working tree, then describe the diff.
-fn playlist_change(dir: &Path, path: &str, kind: ChangeKind) -> (String, Option<String>) {
-    let working = std::fs::read_to_string(dir.join(path))
+fn working_playlist(dir: &Path, path: &str) -> Option<PlaylistFile> {
+    std::fs::read_to_string(dir.join(path))
         .ok()
-        .and_then(|s| serde_json::from_str::<PlaylistFile>(&s).ok());
-    let head = run(dir, &["show", &format!("HEAD:{path}")])
+        .and_then(|s| serde_json::from_str(&s).ok())
+}
+
+fn head_playlist(dir: &Path, path: &str) -> Option<PlaylistFile> {
+    run(dir, &["show", &format!("HEAD:{path}")])
         .ok()
         .filter(|o| o.status.success())
-        .and_then(|o| serde_json::from_slice::<PlaylistFile>(&o.stdout).ok());
+        .and_then(|o| serde_json::from_slice(&o.stdout).ok())
+}
 
-    match (head, working) {
+/// Describe a playlist that changed file: its committed self at the old path against its
+/// working self at the new one. Nothing here cares that the path moved — the interesting
+/// change is the rename that caused it, which `diff_playlists` reads off the name.
+fn playlist_move(dir: &Path, from: &str, to: &str) -> (String, Option<String>) {
+    match (head_playlist(dir, from), working_playlist(dir, to)) {
+        (Some(head), Some(working)) => diff_playlists(&head, &working),
+        _ => (format!("Move {from} → {to}"), None),
+    }
+}
+
+/// Read a playlist file at HEAD (committed) and in the working tree, then describe the diff.
+fn playlist_change(dir: &Path, path: &str, kind: ChangeKind) -> (String, Option<String>) {
+    match (head_playlist(dir, path), working_playlist(dir, path)) {
         (None, Some(w)) => (
             format!("Add playlist \"{}\" ({} tracks)", w.name, w.tracks.len()),
             None,
@@ -747,6 +820,33 @@ mod tests {
         );
         std::fs::create_dir_all(dir.join("playlists")).unwrap();
         std::fs::write(dir.join("playlists").join(file), json).unwrap();
+    }
+
+    #[test]
+    fn a_playlist_that_moved_file_reads_as_a_rename_not_a_remove_and_an_add() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let work = unique_dir("renamed");
+        git(&work, &["init", "-q"]);
+        git(&work, &["config", "user.name", "Test"]);
+        git(&work, &["config", "user.email", "test@example.com"]);
+        write_playlist(&work, "road-trip.json", "Road Trip", &["a", "b"]);
+        git(&work, &["add", "-A"]);
+        git(&work, &["commit", "-qm", "init"]);
+
+        // What a rename looks like on disk before anything is staged: the old file gone, a new
+        // one carrying the same Spotify id in its place.
+        std::fs::remove_file(work.join("playlists").join("road-trip.json")).unwrap();
+        write_playlist(&work, "long-drives.json", "Long Drives", &["a", "b"]);
+
+        let s = status(&work).unwrap();
+        assert_eq!(s.changes.len(), 1, "one playlist moved, not two files: {:?}", s.changes);
+        assert_eq!(s.changes[0].summary, "Rename \"Road Trip\" → \"Long Drives\"");
+        assert_eq!(s.changes[0].path, "playlists/long-drives.json");
+
+        let _ = std::fs::remove_dir_all(&work);
     }
 
     #[test]
