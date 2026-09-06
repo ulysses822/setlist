@@ -107,6 +107,24 @@ npm run tauri dev
 under `src-tauri/target/release/`. You still need your own Spotify app and the Setup-tab
 steps above.
 
+### Running the checks
+
+These are exactly what CI runs on every push and pull request
+([`.github/workflows/ci.yml`](.github/workflows/ci.yml)), so a green run locally means a green
+run there:
+
+```bash
+npm run build   # tsc (strict) + vite build
+npm test        # the Rust suite — sync/push planner, staging, renames, git
+npm run lint    # clippy, warnings denied
+```
+
+The Rust half is Windows-only (see [Platform support](#platform-support)), so `npm test` and
+`npm run lint` won't build elsewhere. `npm run build` works anywhere.
+
+Please add a test with a behaviour change — the suite is where the sync engine's invariants are
+written down, and it's the only thing standing between a refactor and someone's real playlists.
+
 ### The listening-history logger (optional)
 
 The logger runs in **your data repo's** GitHub Actions, keeping personal play history and

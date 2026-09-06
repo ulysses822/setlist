@@ -1,0 +1,74 @@
+name: CI
+
+# Builds the frontend and runs the Rust test suite and linter on every push and pull request.
+#
+# Deliberately NOT path-filtered, unlike audit.yml: that workflow's verdict depends only on the
+# lockfiles and the advisory database, so a source-only commit cannot change it. This one is the
+# opposite — any source change can break it, which is the whole point.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the previous run's answer obsolete. Windows minutes
+# bill at 2x, so don't spend them finishing a run nobody will read.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    # Cheap and fast, so it runs on Linux and gives a type-error verdict in well under a minute
+    # without waiting on the Windows job below.
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a full commit SHA, not a mutable tag, for the same reason as the other
+      # workflows: a hijacked tag must not be able to inject code into CI.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # --ignore-scripts matches audit.yml and release.yml — install hooks are the
+      # highest-leverage npm supply-chain vector and nothing here needs them.
+      - run: npm ci --ignore-scripts
+
+      # `npm run build` is `tsc && vite build`. tsc runs under strict + noUnusedLocals +
+      # noUnusedParameters, and it is the exact command release.yml depends on, so a type error
+      # can no longer reach a tag unnoticed.
+      - run: npm run build
+
+  rust:
+    # Windows is not a preference here. src-tauri/src/spotify/auth.rs carries a `compile_error!`
+    # for every non-Windows target (without keyring's windows-native backend the refresh token
+    # lands in a mock that forgets it), so the crate cannot be built or tested anywhere else.
+    # See "Platform support" in the README.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # A cold Tauri dependency tree is several minutes of Windows compile time — the difference
+      # between a check people wait for and one they learn to ignore. Keyed on the lockfile; the
+      # restore-key lets an unrelated dependency bump reuse most of the previous run's work.
+      # Dropping this step costs only time, never correctness.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # No npm step: `generate_context!` only embeds `frontendDist` in a release build. Debug
+      # builds serve the frontend from `devUrl`, so `dist/` needn't exist to compile or test.
+      # Rust is preinstalled on the runner, so the third-party surface stays at the two pinned
+      # actions above.
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: src-tauri
+
+      - name: Tests
+        run: cargo test
+        working-directory: src-tauri
