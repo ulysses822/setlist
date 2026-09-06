@@ -516,6 +516,51 @@ pub fn clear_staged(staging_dir: PathBuf, file: String) -> Result<(), String> {
 
 // --- Archive (local curation; the Spotify-side unfollow is a separate action) ---
 
+/// Per-playlist mood goals, keyed by playlist file name.
+///
+/// Committed, like `archived.json` and `pinned.json`: a goal is curation intent you set
+/// deliberately and the app acts on, so it belongs beside the playlists it describes rather
+/// than inside a browser profile the uninstaller offers to wipe.
+///
+/// The shape is owned by the frontend, which defines the dimensions and clamps them on read,
+/// so this stores it opaquely rather than restating the model in two languages.
+pub fn load_goals(data_dir: &Path) -> serde_json::Value {
+    read_json_object(&data_dir.join("goals.json"))
+}
+
+pub fn save_goals(data_dir: &Path, goals: &serde_json::Value) -> Result<(), String> {
+    write_atomic(
+        &data_dir.join("goals.json"),
+        &serde_json::to_string_pretty(goals).map_err(err)?,
+    )
+}
+
+/// View state: shown columns, outlier method, the frozen similarity projection, the hub repo
+/// slug. In the data folder so it follows the library rather than the machine, but under
+/// gitignored `cache/` -- none of it is curation, and it churns every time a column is toggled.
+pub fn load_ui_state(data_dir: &Path) -> serde_json::Value {
+    read_json_object(&data_dir.join("cache").join("ui-state.json"))
+}
+
+pub fn save_ui_state(data_dir: &Path, state: &serde_json::Value) -> Result<(), String> {
+    let dir = data_dir.join("cache");
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    write_atomic(
+        &dir.join("ui-state.json"),
+        &serde_json::to_string_pretty(state).map_err(err)?,
+    )
+}
+
+/// A missing, unreadable or non-object file reads as `{}` -- these stores are conveniences,
+/// and none of them is worth failing an app launch over.
+fn read_json_object(path: &Path) -> serde_json::Value {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
 pub fn load_archived(data_dir: &Path) -> std::collections::HashSet<String> {
     std::fs::read_to_string(data_dir.join("archived.json"))
         .ok()

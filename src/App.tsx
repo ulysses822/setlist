@@ -5,6 +5,7 @@ import { PlaybackBar } from "./player";
 import { useRateLimit } from "./rateLimit";
 import { GitChip, GitPanel, useGit } from "./git";
 import { ThemeToggle } from "./theme";
+import * as prefs from "./prefs";
 import "./App.css";
 
 type Tab = "library" | "setup";
@@ -79,15 +80,12 @@ function App() {
     null | "login" | "pull" | "list" | "save" | "probe" | "mint" | "scaffold"
   >(null);
   // GitHub repo slug for the history-logger deep links (purely a UI convenience).
-  const [hubRepo, setHubRepo] = useState(() => {
-    try {
-      return localStorage.getItem("setlist.hubRepo") ?? "";
-    } catch {
-      return "";
-    }
-  });
+  const [hubRepo, setHubRepo] = useState(() => prefs.getHubRepo());
   // Minted history token — held in memory only, shown once, never persisted.
   const [historyToken, setHistoryToken] = useState("");
+  // Goals and view state come from the data folder, so the library can't render until they
+  // have arrived — reading them early would show defaults and then never correct itself.
+  const [prefsReady, setPrefsReady] = useState(false);
   // Client secret for minting the (non-rotating) history token. In-memory only — used for the
   // confidential auth flow and never written to disk; the user also stores it as a GitHub secret.
   const [clientSecret, setClientSecret] = useState("");
@@ -115,6 +113,11 @@ function App() {
       } catch (e) {
         setStatus({ kind: "err", msg: String(e) });
       }
+      // Never fails loudly: with no data folder configured yet there is nothing to load, and
+      // the defaults are the right answer.
+      await prefs.loadPrefs();
+      setHubRepo(prefs.getHubRepo());
+      setPrefsReady(true);
     })();
   }, []);
 
@@ -130,6 +133,8 @@ function App() {
       if (dir) {
         setDataDir(dir);
         await api.setConfig(clientId, dir); // persist so git status reads the new folder
+        await prefs.loadPrefs(); // a different folder is a different library's goals/columns
+        setHubRepo(prefs.getHubRepo());
         git?.refresh();
       }
     } catch (e) {
@@ -146,6 +151,9 @@ function App() {
     setStatus(null);
     try {
       await api.setConfig(clientId, dataDir);
+      // Typing a path straight into the field changes libraries just as Browse… does.
+      await prefs.loadPrefs();
+      setHubRepo(prefs.getHubRepo());
       setStatus({ kind: "ok", msg: "Settings saved" });
     } catch (e) {
       setStatus({ kind: "err", msg: String(e) });
@@ -250,7 +258,7 @@ function App() {
   function saveHubRepo(v: string) {
     setHubRepo(v);
     try {
-      localStorage.setItem("setlist.hubRepo", v);
+      prefs.setHubRepo(v);
     } catch {
       /* ignore quota/availability errors */
     }
@@ -350,7 +358,7 @@ function App() {
     return (
       <div className="shell">
         <Nav tab={tab} setTab={setTab} connected={connected} />
-        <Library />
+        {prefsReady && <Library />}
         <PlaybackBar />
         <GitPanel />
       </div>

@@ -28,7 +28,6 @@ import {
   type FeatureKey,
   type Goal,
   type GoalDeviation,
-  type GoalDim,
   type Outlier,
   type OutlierMode,
 } from "./metricsCalc";
@@ -56,72 +55,21 @@ import { useNowPlaying } from "./player";
 import { useGit } from "./git";
 import { diffTracks, type DiffStatus } from "./playlistDiff";
 import { useRateLimit } from "./rateLimit";
+import * as prefs from "./prefs";
 
 type Status = { kind: "ok" | "warn" | "err"; msg: string } | null;
 type SidebarMode = "playlists" | "songs";
 // View-only sort: the official order ("index"), title/duration, or any audio-feature column.
 type SortKey = "index" | "title" | "duration" | FeatureKey;
 
-// Which feature columns show in the track table. Customizable per playlist (the metrics
-// that matter vary by playlist) and persisted in localStorage keyed by file.
-const DEFAULT_COLS: FeatureKey[] = ["valence", "energy", "tempo"];
-
-function loadCols(file: string): FeatureKey[] {
-  try {
-    const raw = localStorage.getItem(`setlist.cols.${file}`);
-    if (raw) {
-      const parsed = JSON.parse(raw) as FeatureKey[];
-      // Keep canonical order and drop any unknown keys.
-      return FEATURE_META.filter((m) => parsed.includes(m.key)).map((m) => m.key);
-    }
-  } catch {
-    /* ignore corrupt entries */
-  }
-  return DEFAULT_COLS;
-}
-
-// Per-playlist fingerprint goal, persisted like column choices. Returns null if unset.
-function loadGoal(file: string): Goal | null {
-  try {
-    const raw = localStorage.getItem(`setlist.goal.${file}`);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<Record<GoalDim, number>>;
-    const goal = {} as Goal;
-    for (const k of GOAL_DIMS) goal[k] = Math.max(0, Math.min(1, parsed[k] ?? 0.5));
-    return goal;
-  } catch {
-    return null;
-  }
-}
-
-function saveGoal(file: string, goal: Goal | null) {
-  try {
-    if (goal) localStorage.setItem(`setlist.goal.${file}`, JSON.stringify(goal));
-    else localStorage.removeItem(`setlist.goal.${file}`);
-  } catch {
-    /* ignore quota/availability errors */
-  }
-}
-
-// Outlier-detection method. Global (not per playlist): it's a methodology preference,
-// not a property of any one playlist.
-function loadOutlierMode(): OutlierMode {
-  try {
-    return localStorage.getItem("setlist.outlierMode") === "multivariate"
-      ? "multivariate"
-      : "independent";
-  } catch {
-    return "independent";
-  }
-}
-
-function saveOutlierMode(mode: OutlierMode) {
-  try {
-    localStorage.setItem("setlist.outlierMode", mode);
-  } catch {
-    /* ignore quota/availability errors */
-  }
-}
+// Column choices, mood goals and the outlier method all live in the data folder now — see
+// prefs.ts for why. These stay synchronous because they run during render; prefs holds both
+// stores in memory after a single load at startup.
+const loadCols = (file: string): FeatureKey[] => prefs.getCols(file);
+const loadGoal = (file: string): Goal | null => prefs.getGoal(file);
+const saveGoal = (file: string, goal: Goal | null) => prefs.setGoal(file, goal);
+const loadOutlierMode = (): OutlierMode => prefs.getOutlierMode() as OutlierMode;
+const saveOutlierMode = (mode: OutlierMode) => prefs.setOutlierMode(mode);
 
 function move<T>(arr: T[], from: number, to: number): T[] {
   const next = [...arr];
@@ -277,7 +225,7 @@ export default function Library() {
   const [featureMap, setFeatureMap] = useState<Record<string, Features>>({});
   const [analyzing, setAnalyzing] = useState<Set<string>>(new Set()); // track ids in flight
   const [metricsOpen, setMetricsOpen] = useState(false);
-  const [cols, setCols] = useState<FeatureKey[]>(DEFAULT_COLS); // visible feature columns
+  const [cols, setCols] = useState<FeatureKey[]>(prefs.DEFAULT_COLS); // visible feature columns
   const [colPicker, setColPicker] = useState(false);
   const [goal, setGoalState] = useState<Goal | null>(null); // optional per-playlist target
   const [goalEditing, setGoalEditing] = useState(false);
@@ -461,7 +409,7 @@ export default function Library() {
       const ordered = FEATURE_META.filter((m) => want.includes(m.key)).map((m) => m.key);
       if (selected) {
         try {
-          localStorage.setItem(`setlist.cols.${selected}`, JSON.stringify(ordered));
+          prefs.setCols(selected, ordered);
         } catch {
           /* ignore quota/availability errors */
         }
@@ -1175,7 +1123,7 @@ export default function Library() {
     [draft, featureMap, goal]
   );
 
-  // --- Fingerprint goal controls (persisted per playlist in localStorage) ---
+  // --- Fingerprint goal controls (persisted per playlist in goals.json) ---
   function updateGoal(next: Goal | null) {
     setGoalState(next);
     if (selected) saveGoal(selected, next);

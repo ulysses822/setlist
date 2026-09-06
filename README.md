@@ -132,10 +132,10 @@ The app repo holds only code. Everything personal lives in the data folder you c
 | Path (data repo) | What it is |
 |------|------|
 | `playlists/*.json` | Source of truth — one pretty-printed, diff-friendly file per playlist (content only) |
-| `archived.json`, `pinned.json` | Curation state |
+| `archived.json`, `pinned.json`, `goals.json` | Curation state — archived/pinned lists and per-playlist mood goals |
 | `history/plays.jsonl` | Append-only listening log |
 | `staged/` | Saved-but-unpushed edits, git-ignored — drafts waiting for a push |
-| `cache/` | Derived/rebuildable, git-ignored — audio features and `sync-meta.json` (per-playlist snapshot id, last-synced time, cover URL) |
+| `cache/` | Derived/rebuildable, git-ignored — audio features, `sync-meta.json` (per-playlist snapshot id, last-synced time, cover URL) and `ui-state.json` (shown columns, outlier method, frozen similarity axes) |
 
 Because the data folder is a git repo, Setlist versions it **for you** — no terminal
 needed. The top-bar chip shows when there's something to commit; open it to review every
@@ -156,14 +156,13 @@ it removes three things:
 | | |
 |---|---|
 | `%APPDATA%\com.setlist.app` | Your Client ID and the data-folder path |
-| `%LOCALAPPDATA%\com.setlist.app` | The WebView2 profile, which holds per-playlist column layouts, mood goals, the theme choice and the frozen similarity-map axes |
+| `%LOCALAPPDATA%\com.setlist.app` | The WebView2 profile — which now holds only your light/dark choice |
 | Windows Credential Manager | The Spotify refresh tokens |
 
-**Your data folder is never touched.** Playlists, history, cache and unpushed edits are yours
-and stay exactly where they are, uninstall or not — reinstall and Setlist picks up mid-edit.
-
-The one thing worth knowing: mood goals and column layouts are held by the webview, so they go
-with the checkbox even though the rest of your curation survives.
+**Your data folder is never touched.** Playlists, history, unpushed edits, mood goals and
+column layouts are yours and stay exactly where they are, uninstall or not — reinstall, point
+Setlist at the same folder, and it picks up mid-edit. The only thing the checkbox costs you is
+your light/dark preference.
 
 ## Good to know
 

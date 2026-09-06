@@ -325,6 +325,32 @@ fn set_archived(app: tauri::AppHandle, file: String, archived: bool) -> Result<(
     spotify::set_archived(config::resolve_data_dir(&cfg)?, file, archived)
 }
 
+/// Mood goals and view state. Both are read once at startup and written through on change,
+/// so these are the only two round trips the UI makes for them.
+#[tauri::command(async)]
+fn get_goals(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let cfg = config::load(&app)?;
+    Ok(spotify::load_goals(&config::resolve_data_dir(&cfg)?))
+}
+
+#[tauri::command(async)]
+fn set_goals(app: tauri::AppHandle, goals: serde_json::Value) -> Result<(), String> {
+    let cfg = config::load(&app)?;
+    spotify::save_goals(&config::resolve_data_dir(&cfg)?, &goals)
+}
+
+#[tauri::command(async)]
+fn get_ui_state(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let cfg = config::load(&app)?;
+    Ok(spotify::load_ui_state(&config::resolve_data_dir(&cfg)?))
+}
+
+#[tauri::command(async)]
+fn set_ui_state(app: tauri::AppHandle, state: serde_json::Value) -> Result<(), String> {
+    let cfg = config::load(&app)?;
+    spotify::save_ui_state(&config::resolve_data_dir(&cfg)?, &state)
+}
+
 #[tauri::command(async)]
 fn set_pinned(app: tauri::AppHandle, file: String, pinned: bool) -> Result<(), String> {
     let cfg = config::load(&app)?;
@@ -596,6 +622,10 @@ pub fn run() {
             clear_staged,
             set_archived,
             set_pinned,
+            get_goals,
+            set_goals,
+            get_ui_state,
+            set_ui_state,
             create_playlist,
             delete_playlist,
             unfollow_archived,

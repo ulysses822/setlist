@@ -15,6 +15,7 @@ import {
   projectPca,
 } from "./metricsCalc";
 import type { PcaBasis } from "./metricsCalc";
+import * as prefs from "./prefs";
 
 type ColorBy = "none" | "valence" | "energy";
 
@@ -24,7 +25,7 @@ const PAD = 60;
 
 // The frozen projection basis persists across edits/restarts so the map doesn't reshuffle every
 // time a playlist changes; the user re-fits it deliberately with "Recalculate".
-const BASIS_KEY = "setlist.simBasis";
+
 
 // Dim slate → accent green, for the optional colour-by-feature encoding.
 function heat(t: number): string {
@@ -73,16 +74,11 @@ export default function SimilarityView({
   const [colorBy, setColorBy] = useState<ColorBy>("none");
   const [showArchived, setShowArchived] = useState(false);
   const [hovered, setHovered] = useState<string | null>(null);
-  // The projection axes are frozen (loaded from localStorage) so the map only re-lays-out on an
-  // explicit Recalculate. null until the first fit (or after a clear).
-  const [basis, setBasis] = useState<PcaBasis | null>(() => {
-    try {
-      const raw = localStorage.getItem(BASIS_KEY);
-      return raw ? (JSON.parse(raw) as PcaBasis) : null;
-    } catch {
-      return null;
-    }
-  });
+  // The projection axes are frozen (stored with the library, see prefs.ts) so the map only
+  // re-lays-out on an explicit Recalculate. null until the first fit (or after a clear).
+  const [basis, setBasis] = useState<PcaBasis | null>(
+    () => (prefs.getSimBasis() as PcaBasis | null) ?? null
+  );
 
   const archivedCount = useMemo(
     () => (data ?? []).filter((pl) => archived.has(pl.file)).length,
@@ -126,9 +122,9 @@ export default function SimilarityView({
     if (!fitted) return;
     setBasis(fitted);
     try {
-      localStorage.setItem(BASIS_KEY, JSON.stringify(fitted));
+      prefs.setSimBasis(fitted);
     } catch {
-      /* localStorage full/unavailable — the map still works for this session. */
+      /* Unwritable store — the map still works for this session. */
     }
   }
 

@@ -265,6 +265,11 @@ export const api = {
   getStaged: (file: string) => invoke<StagedEdit | null>("get_staged", { file }),
   readAllPlaylists: () => invoke<NamedPlaylist[]>("read_all_playlists"),
   clearStaged: (file: string) => invoke<void>("clear_staged", { file }),
+  // Curation and view state kept in the data folder — see prefs.ts.
+  getGoals: () => invoke<Record<string, unknown>>("get_goals"),
+  setGoals: (goals: unknown) => invoke<void>("set_goals", { goals }),
+  getUiState: () => invoke<Record<string, unknown>>("get_ui_state"),
+  setUiState: (state: unknown) => invoke<void>("set_ui_state", { state }),
   setArchived: (file: string, archived: boolean) =>
     invoke<void>("set_archived", { file, archived }),
   setPinned: (file: string, pinned: boolean) =>
