@@ -44,12 +44,23 @@ pub struct PushOutcome {
 
 // --- low-level git runner ---------------------------------------------------
 
+/// Windows gives every child process of a GUI app its own console window. The release build
+/// is `windows_subsystem = "windows"` and so owns no console to lend them, which means each
+/// git call flashes a black window on screen -- and one tab switch runs several. Debug builds
+/// are console-subsystem apps whose children inherit the terminal, which is why this is
+/// invisible under `tauri dev` and only shows up in a packaged build.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 fn run(dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(dir).args(args);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.output()
         .map_err(|e| format!("Couldn't run git (is it installed and on your PATH?): {e}"))
 }
 
