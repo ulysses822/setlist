@@ -1,0 +1,10 @@
+# Revisions to skip when running `git blame`. Bulk mechanical changes only —
+# nothing here altered behaviour, and leaving them in makes blame point at the
+# reformat instead of at whoever wrote the line.
+#
+# Your local clone doesn't use this automatically. Turn it on once with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub picks it up on its own.
+
+# Format with cargo fmt, and gate it in CI
+8353f443e7e09a4f86cc8228d72fcd08a2dbe9f2
