@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { api, type DeviceInfo, type RemotePlayback } from "./api";
+import type { SpotifyPlayer, SpotifyWebPlaybackState } from "./spotify-sdk";
 
 // The `any`s below are all Spotify's Web Playback SDK. It's loaded from their CDN at runtime
 // rather than installed, ships no type definitions, and isn't in package.json — so `window.Spotify`
@@ -36,7 +37,7 @@ export interface PlayerApi {
   error: string | null;
   clearError: () => void;
   /** Play a playlist from a given track (contextUri = playlist uri, offsetUri = track uri). */
-  play: (contextUri: string | null, offsetUri: string | null, uris?: string[]) => void;
+  play: (contextUri: string | null, offsetUri: string | null, uris?: string[]) => Promise<void>;
   toggle: () => void;
   next: () => void;
   prev: () => void;
@@ -50,7 +51,7 @@ export interface PlayerApi {
   /** This app's own Web Playback SDK device id (to label it in the picker). */
   localDeviceId: string | null;
   refreshDevices: () => Promise<void>;
-  transferTo: (deviceId: string) => void;
+  transferTo: (deviceId: string) => Promise<void>;
   /** Deliver a token the SDK is still waiting for. See `retryToken` for why. */
   retryToken: () => void;
 }
@@ -104,7 +105,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // Non-null while playback lives on another Spotify Connect device. Mirrored into a ref
   // so the poll loop and control handlers always see the current value.
   const [remote, setRemote] = useState<{ id: string; name: string } | null>(null);
-  const playerRef = useRef<any>(null);
+  const playerRef = useRef<SpotifyPlayer | null>(null);
   const deviceRef = useRef<string | null>(null);
   const remoteRef = useRef<{ id: string; name: string } | null>(null);
   // Mirror of state.paused for the poll loop (which can't read state directly). A paused
@@ -157,14 +158,14 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
 
-    function applyState(s: any) {
+    function applyState(s: SpotifyWebPlaybackState | null) {
       if (!s) return;
       const t = s.track_window?.current_track;
       if (!t) return;
       setState({
         trackName: t.name,
         uri: t.uri,
-        artists: (t.artists ?? []).map((a: any) => a.name).join(", "),
+        artists: (t.artists ?? []).map((a) => a.name).join(", "),
         paused: s.paused,
         position: s.position,
         duration: s.duration,
@@ -175,7 +176,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     }
 
     function init() {
-      const Spotify = (window as any).Spotify;
+      const Spotify = window.Spotify;
       if (!Spotify || playerRef.current) return;
       const player = new Spotify.Player({
         name: "Setlist",
@@ -200,7 +201,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       });
       playerRef.current = player;
 
-      player.addListener("ready", ({ device_id }: any) => {
+      player.addListener("ready", ({ device_id }) => {
         if (cancelled) return;
         deviceRef.current = device_id;
         setReady(true);
@@ -214,29 +215,29 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         setReady(false);
       });
       player.addListener("player_state_changed", applyState);
-      player.addListener("initialization_error", ({ message }: any) =>
+      player.addListener("initialization_error", ({ message }) =>
         setError(`Init error: ${message}`)
       );
-      player.addListener("authentication_error", ({ message }: any) =>
+      player.addListener("authentication_error", ({ message }) =>
         setError(`Auth error: ${message} (reconnect in Setup to grant streaming)`)
       );
-      player.addListener("account_error", ({ message }: any) =>
+      player.addListener("account_error", ({ message }) =>
         setError(`Account error — Spotify Premium is required. ${message}`)
       );
-      player.addListener("playback_error", ({ message }: any) =>
+      player.addListener("playback_error", ({ message }) =>
         setError(`Playback error: ${message}`)
       );
-      player.connect();
+      void player.connect();
     }
 
-    if ((window as any).Spotify) {
+    if (window.Spotify) {
       init();
     } else {
       // Define the ready callback BEFORE the SDK script runs, then load the SDK. (A static
       // <script> tag in index.html executes ahead of this bundle, and the SDK throws if the
       // callback doesn't exist yet.) Dynamic injection also satisfies the CSP: the script
       // still comes from sdk.scdn.co, no inline code involved.
-      (window as any).onSpotifyWebPlaybackSDKReady = init;
+      window.onSpotifyWebPlaybackSDKReady = init;
       if (!document.getElementById("spotify-sdk")) {
         const s = document.createElement("script");
         s.id = "spotify-sdk";
@@ -294,7 +295,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (!dragging) {
-        playerRef.current?.getCurrentState?.().then((s: any) => {
+        void playerRef.current?.getCurrentState?.().then((s) => {
           if (s) applyState(s);
         });
       }
@@ -379,7 +380,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   // Stable for the same reason: the memoized volume slider in PlaybackBar keys on it.
   const setVolume = useCallback((v: number) => {
     setVolumeState(v);
-    playerRef.current?.setVolume?.(v);
+    void playerRef.current?.setVolume?.(v);
   }, []);
 
   /// Answer a token request the SDK is still waiting on. Called after a successful login:
@@ -417,7 +418,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           .then(() => setState((s) => (s ? { ...s, paused: !paused } : s)))
           .catch((e) => setError(String(e)));
       } else {
-        playerRef.current?.togglePlay();
+        void playerRef.current?.togglePlay();
       }
     },
     next: () => {
@@ -429,7 +430,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           .then(() => api.playerState().then(applyRemoteState).catch(() => {}))
           .catch((e) => setError(String(e)));
       } else {
-        playerRef.current?.nextTrack();
+        void playerRef.current?.nextTrack();
       }
     },
     prev: () => {
@@ -439,7 +440,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           .then(() => api.playerState().then(applyRemoteState).catch(() => {}))
           .catch((e) => setError(String(e)));
       } else {
-        playerRef.current?.previousTrack();
+        void playerRef.current?.previousTrack();
       }
     },
     seek: (ms: number) => {
@@ -449,7 +450,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
           .then(() => setState((s) => (s ? { ...s, position: ms } : s)))
           .catch((e) => setError(String(e)));
       } else {
-        playerRef.current?.seek(ms);
+        void playerRef.current?.seek(ms);
       }
     },
     volume,
@@ -703,7 +704,7 @@ export function PlaybackBar() {
                           className={"pb-dev-item" + (d.is_active ? " active" : "")}
                           onClick={() => {
                             setPickerOpen(false);
-                            transferTo(d.id);
+                            void transferTo(d.id);
                           }}
                         >
                           <span className="pb-dev-name">
