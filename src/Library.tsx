@@ -1,33 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
-  type Aggregates,
-  type Features,
   type LocalPlaylist,
   type LocalTrackHit,
-  type PlaylistFile,
-  type PushStrategy,
   type ReplacementSuggestion,
   type SearchResult,
-  type SyncStatus,
   type TrackEntry,
 } from "./api";
-import MetricsPanel, { type GoalControl } from "./MetricsPanel";
+import MetricsPanel from "./MetricsPanel";
+import { usePlaylistMetrics } from "./usePlaylistMetrics";
+import { usePlaylistDraft, type Status } from "./usePlaylistDraft";
 import {
   bareId,
-  computeAggregates,
-  computeGoalDeviations,
-  computeOutliersByMode,
   FEATURE_LABEL,
   FEATURE_META,
   fmtFeature,
-  GOAL_DIMS,
   isLocalTrack,
   type FeatureKey,
-  type Goal,
   type GoalDeviation,
-  type Outlier,
-  type OutlierMode,
 } from "./metricsCalc";
 import {
   issueCount,
@@ -53,9 +43,7 @@ import { useNowPlaying } from "./player";
 import { useGit } from "./git";
 import { diffTracks, type DiffStatus } from "./playlistDiff";
 import { useRateLimit } from "./rateLimit";
-import * as prefs from "./prefs";
 
-type Status = { kind: "ok" | "warn" | "err"; msg: string } | null;
 type SidebarMode = "playlists" | "songs";
 // View-only sort: the official order ("index"), title/duration, or any audio-feature column.
 type SortKey = "index" | "title" | "duration" | FeatureKey;
@@ -63,29 +51,12 @@ type SortKey = "index" | "title" | "duration" | FeatureKey;
 // Column choices, mood goals and the outlier method all live in the data folder now — see
 // prefs.ts for why. These stay synchronous because they run during render; prefs holds both
 // stores in memory after a single load at startup.
-const loadCols = (file: string): FeatureKey[] => prefs.getCols(file);
-const loadGoal = (file: string): Goal | null => prefs.getGoal(file);
-const saveGoal = (file: string, goal: Goal | null) => prefs.setGoal(file, goal);
-const loadOutlierMode = (): OutlierMode => prefs.getOutlierMode() as OutlierMode;
-const saveOutlierMode = (mode: OutlierMode) => prefs.setOutlierMode(mode);
 
 function move<T>(arr: T[], from: number, to: number): T[] {
   const next = [...arr];
   const [item] = next.splice(from, 1);
   next.splice(to, 0, item);
   return next;
-}
-
-// Overlay availability (is_playable) from the canonical mirror onto an edited track list,
-// matched by bare Spotify id. Staged edits don't carry is_playable, so without this the
-// greyed-out state is lost whenever a playlist has unpushed edits. Tracks not in the mirror
-// (e.g. just added from search) keep their own value.
-function withAvailability(tracks: TrackEntry[], mirror: TrackEntry[]): TrackEntry[] {
-  const avail = new Map(mirror.map((t) => [bareId(t.id), t.is_playable]));
-  return tracks.map((t) => {
-    const a = avail.get(bareId(t.id));
-    return a === undefined ? t : { ...t, is_playable: a };
-  });
 }
 
 // Minimalist toolbar icons (inline SVG, currentColor) for the library overview tools —
@@ -127,34 +98,15 @@ export default function Library() {
   const [filter, setFilter] = useState("");
   const [hits, setHits] = useState<LocalTrackHit[]>([]);
 
-  const [selected, setSelected] = useState<string | null>(null);
-  const [draft, setDraft] = useState<PlaylistFile | null>(null);
-  const [baseline, setBaseline] = useState<TrackEntry[]>([]); // canonical Spotify-mirror order
-  const [showDiff, setShowDiff] = useState(false); // inline "Show changes" review mode
-  // View-only sort of the track list. "index" is the official playlist order (the real
-  // order; only this mode is reorderable). Title/duration just change how rows are displayed.
+  // Editor view state that belongs to this component rather than to the draft: how the
+  // track list is sorted, and the message line every operation reports through.
   const [sortKey, setSortKey] = useState<SortKey>("index");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [dirty, setDirty] = useState(false); // in-memory edits not yet staged
-  // Content snapshot of the last persisted (staged-or-canonical) version of the open
-  // playlist. "Dirty" means the draft differs from this — so edits that cancel out (add a
-  // song then remove it, swap two songs then swap back) clear the flag again rather than
-  // sticking forever.
-  const persistedRef = useRef("");
-  const contentKey = (name: string, description: string, tracks: TrackEntry[]) =>
-    `${name}\u0000${description}\u0000${tracks.map((t) => t.id).join("\u0001")}`;
-  const markPersisted = (name: string, description: string, tracks: TrackEntry[]) => {
-    persistedRef.current = contentKey(name, description, tracks);
-  };
-  // Content snapshot of the canonical Spotify mirror (ignores staged edits). When the
-  // draft returns to exactly this — e.g. a song was added, staged, then removed again —
-  // the staged copy holds nothing real and is dropped so "modified" clears everywhere.
-  const canonicalRef = useRef("");
-  const [staged, setStaged] = useState(false); // saved (cached) but not pushed
-  const [busy, setBusy] = useState<null | "load" | "open" | "save" | "push">(null);
   const [status, setStatus] = useState<Status>(null);
-  const [sync, setSync] = useState<SyncStatus | null>(null); // remote-change banner
-  const [conflict, setConflict] = useState<SyncStatus | null>(null); // push conflict modal
+  // The sidebar's own load. Deliberately separate from the draft's `busy`: a list refresh
+  // can overlap a save or a push, and clearing one must not clear the other.
+  const [listBusy, setListBusy] = useState(false);
+
 
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -191,28 +143,87 @@ export default function Library() {
   // alternatives, so opening one cannot leave another behind.
   const [overlay, setOverlay] = useState<Overlay | null>(null);
   const [overlayBusy, setOverlayBusy] = useState(false);
-
   const archivedFiles = useMemo(
     () => new Set(playlists.filter((p) => p.archived).map((p) => p.file)),
     [playlists]
   );
 
-  // Audio features keyed by bare Spotify id, seeded on open and merged as tracks are added.
-  const [featureMap, setFeatureMap] = useState<Record<string, Features>>({});
-  const [analyzing, setAnalyzing] = useState<Set<string>>(new Set()); // track ids in flight
-  const [metricsOpen, setMetricsOpen] = useState(false);
-  const [cols, setCols] = useState<FeatureKey[]>(prefs.DEFAULT_COLS); // visible feature columns
-  const [colPicker, setColPicker] = useState(false);
-  const [goal, setGoalState] = useState<Goal | null>(null); // optional per-playlist target
-  const [goalEditing, setGoalEditing] = useState(false);
-
+  // Everything audio-feature-shaped for the open playlist — the cache, the derived
+  // aggregates/outliers/goal, and the column and panel choices — lives in one hook. Named
+  // back out here so the render reads the same as it always did.
+  // The open playlist's whole edit lifecycle — load, dirty/staged tracking, save, push —
+  // lives in one hook (see usePlaylistDraft). Named back out here so the render is unchanged.
   const player = useNowPlaying();
   const git = useGit();
   const { blocked } = useRateLimit();
-  // Monotonic ticket for async loads that replace the draft (open/pull/revert/push). A
-  // slow response from a playlist the user has already navigated away from must not apply
-  // its state (or its sync banner) over the newer playlist.
-  const openTicket = useRef(0);
+
+  const draftApi = usePlaylistDraft({
+    blocked,
+    confirm: confirmDialog,
+    onStatus: setStatus,
+    onPlaylistsChanged: () => {
+      api.listLocalPlaylists().then(setPlaylists).catch(() => {});
+    },
+    onLibraryChanged: () => void loadList(),
+    onOpening: (file) => {
+      setResults([]);
+      setQuery("");
+      metrics.resetFor(file); // this playlist's saved columns and mood goal
+    },
+    onTracksLoaded: (tracks) => metrics.loadFeatures(tracks),
+    onOpened: (focusTrackId) => {
+      setSortKey("index"); // open in official order
+      setSortDir("asc");
+      setIssuesOpen(false);
+      setOverlay(null); // a playlist takes the pane back from whichever panel had it
+      setEditMeta(false);
+      if (focusTrackId) setFocusTrack(focusTrackId);
+    },
+  });
+  const {
+    selected,
+    draft,
+    baseline,
+    dirty,
+    staged,
+    busy,
+    sync,
+    conflict,
+    showDiff,
+    setShowDiff,
+    edit,
+    setMeta,
+    save,
+    push,
+    revert,
+    pullRemote,
+    flush,
+  } = draftApi;
+
+  const metrics = usePlaylistMetrics(selected, draft?.tracks ?? null);
+  const {
+    featureMap,
+    setFeatureMap,
+    featureOf,
+    loadFeatures,
+    analyzing,
+    metricsLoading,
+    showAnalyzing,
+    metricsOpen,
+    setMetricsOpen,
+    cols,
+    toggleCol,
+    colPicker,
+    setColPicker,
+    aggregates,
+    outliers,
+    outlierMode,
+    setOutlierMode,
+    goal,
+    goalDeviations,
+    goalControl,
+  } = metrics;
+
   const tracksRef = useRef<HTMLOListElement>(null);
   const [focusTrack, setFocusTrack] = useState<string | null>(null);
   const [flashId, setFlashId] = useState<string | null>(null);
@@ -241,7 +252,7 @@ export default function Library() {
   }
 
   async function loadList() {
-    setBusy("load");
+    setListBusy(true);
     try {
       setPlaylists(await api.listLocalPlaylists());
       // Keep the data-repo chip live after any change that may have written files.
@@ -249,7 +260,7 @@ export default function Library() {
     } catch (e) {
       setStatus({ kind: "err", msg: String(e) });
     } finally {
-      setBusy(null);
+      setListBusy(false);
     }
   }
 
@@ -284,12 +295,7 @@ export default function Library() {
     try {
       await api.deletePlaylist(deleteTarget.file);
       const name = deleteTarget.name;
-      if (selected === deleteTarget.file) {
-        setSelected(null);
-        setDraft(null);
-        setDirty(false);
-        setStaged(false);
-      }
+      if (selected === deleteTarget.file) draftApi.closeDeleted();
       setDeleteTarget(null);
       await loadList();
       setStatus({ kind: "ok", msg: `Deleted "${name}"` });
@@ -354,217 +360,6 @@ export default function Library() {
   // Fetch audio features for the given tracks in the background and merge them in.
   // Non-blocking: rows render immediately, numbers fill in when the fetch resolves. Tracks
   // already in the map are skipped (features are id-keyed and stable across playlists).
-  function loadFeatures(tracks: TrackEntry[]) {
-    // Skip tracks we already have *and* tracks already in flight (analyzing) — e.g. when
-    // switching back and forth between playlists before the first fetch resolves.
-    const pending = tracks.filter(
-      (t) => !(bareId(t.id) in featureMap) && !analyzing.has(t.id)
-    );
-    if (pending.length === 0) return;
-    const ids = pending.map((t) => t.id);
-    setAnalyzing((prev) => new Set([...prev, ...ids]));
-    api
-      .trackFeatures(pending)
-      .then((map) => setFeatureMap((prev) => ({ ...prev, ...map })))
-      .catch(() => {})
-      .finally(() =>
-        setAnalyzing((prev) => {
-          const next = new Set(prev);
-          for (const id of ids) next.delete(id);
-          return next;
-        })
-      );
-  }
-
-  // Toggle a feature column on/off, keeping canonical order, and persist per playlist.
-  function toggleCol(key: FeatureKey) {
-    setCols((prev) => {
-      const want = prev.includes(key)
-        ? prev.filter((k) => k !== key)
-        : [...prev, key];
-      const ordered = FEATURE_META.filter((m) => want.includes(m.key)).map((m) => m.key);
-      if (selected) {
-        try {
-          prefs.setCols(selected, ordered);
-        } catch {
-          /* ignore quota/availability errors */
-        }
-      }
-      return ordered;
-    });
-  }
-
-  async function open(file: string, focusTrackId?: string) {
-    // Auto-stage any in-memory edits to the current playlist before (re)loading. Staged
-    // edits persist on disk and reload when reopened, so nothing is silently lost. This
-    // must also run when re-clicking the playlist that's already open — otherwise the
-    // reload below would silently discard unsaved edits.
-    if (dirty && draft && selected) {
-      try {
-        // Edits that cancelled out don't warrant a staged file — clear instead of stage.
-        if (contentKey(draft.name, draft.description, draft.tracks) === canonicalRef.current) {
-          await api.clearStaged(selected);
-        } else {
-          await api.stagePlaylist(selected, draft.name, draft.description, draft.tracks);
-        }
-        api.listLocalPlaylists().then(setPlaylists).catch(() => {}); // refresh modified dot
-      } catch (e) {
-        setStatus({ kind: "err", msg: String(e) });
-        return; // couldn't preserve the edits — stay put rather than lose them
-      }
-    }
-    const ticket = ++openTicket.current;
-    setBusy("open");
-    setStatus(null);
-    setResults([]);
-    setQuery("");
-    setSync(null);
-    setConflict(null);
-    // Keep the feature map across playlist switches: features are keyed by track id and are
-    // identical wherever a track appears, so reusing them avoids a frame of empty metrics,
-    // which reads as a jarring flicker.
-    setCols(loadCols(file));
-    setColPicker(false);
-    setGoalState(loadGoal(file));
-    setGoalEditing(false);
-    try {
-      const pf = await api.readPlaylist(file); // canonical = Spotify mirror
-      const cached = await api.getStaged(file); // saved-but-unpushed edits, if any
-      if (ticket !== openTicket.current) return; // superseded by a newer load
-      // Availability (is_playable) lives on the freshly-pulled mirror. Staged edits saved
-      // before this field existed (or that just never carried it) would otherwise shadow it
-      // and lose the greyed-out state — overlay it back by id.
-      const stagedTracks = cached ? withAvailability(cached.tracks, pf.tracks) : null;
-      const tracks = stagedTracks ?? pf.tracks;
-      setSelected(file);
-      setBaseline(pf.tracks); // diff against the Spotify mirror
-      setShowDiff(false);
-      setSortKey("index"); // open in official order
-      setSortDir("asc");
-      setIssuesOpen(false);
-      setOverlay(null); // a playlist takes the pane back from whichever panel had it
-      const merged =
-        cached && stagedTracks
-          ? {
-              ...pf,
-              name: cached.name ?? pf.name,
-              description: cached.description ?? pf.description,
-              tracks: stagedTracks,
-            }
-          : pf;
-      setDraft(merged);
-      markPersisted(merged.name, merged.description, merged.tracks);
-      canonicalRef.current = contentKey(pf.name, pf.description, pf.tracks);
-      let isStaged = cached != null;
-      if (isStaged && persistedRef.current === canonicalRef.current) {
-        // Leftover staged file identical to the mirror (edits that cancelled out) —
-        // drop it so the playlist doesn't read as modified.
-        isStaged = false;
-        api
-          .clearStaged(file)
-          .then(() => void loadList())
-          .catch(() => {});
-      }
-      setStaged(isStaged);
-      setEditMeta(false);
-      setDirty(false);
-      loadFeatures(tracks); // background; only fetches tracks we don't already have
-      if (focusTrackId) setFocusTrack(focusTrackId);
-      // Check Spotify for drift in the background (don't block opening). Skip while
-      // rate-limited (would fail and extend the cooldown) and for local-only playlists
-      // (not on Spotify yet, nothing to compare).
-      if (!blocked && pf.spotify_id) {
-        api
-          .syncStatus(file)
-          .then((s) => {
-            // Don't apply a stale banner to whatever playlist is open by now.
-            if (ticket === openTicket.current) setSync(s.remote_changed ? s : null);
-          })
-          .catch(() => {});
-      }
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      if (ticket === openTicket.current) setBusy(null);
-    }
-  }
-
-  // A playlist's file is named after the playlist, so pulling or pushing a rename moves it
-  // out from under the open editor. Re-point at where it landed, and re-read the goal and
-  // column stores — the backend moved this playlist's entries to the new key and prefs holds
-  // both in memory, so a later save from the stale copy would undo that.
-  async function followRename(file: string) {
-    if (file === selected) return;
-    setSelected(file);
-    await prefs.loadPrefs();
-  }
-
-  // Pull Spotify's current version into the canonical mirror (discards local edits).
-  async function pullRemote() {
-    if (!selected) return;
-    if (
-      (dirty || staged) &&
-      !(await confirmDialog(
-        "Pull Spotify's version? This discards your local edits.",
-        "Pull & discard"
-      ))
-    )
-      return;
-    const ticket = ++openTicket.current;
-    setBusy("open");
-    setStatus(null);
-    try {
-      await api.clearStaged(selected);
-      const { file, playlist: pf } = await api.refreshPlaylist(selected);
-      if (ticket !== openTicket.current) return; // user opened another playlist meanwhile
-      await followRename(file);
-      setDraft(pf);
-      markPersisted(pf.name, pf.description, pf.tracks);
-      canonicalRef.current = persistedRef.current;
-      setBaseline(pf.tracks);
-      loadFeatures(pf.tracks);
-      setDirty(false);
-      setStaged(false);
-      setSync(null);
-      setStatus({ kind: "ok", msg: "Pulled Spotify's current version" });
-      void loadList();
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      if (ticket === openTicket.current) setBusy(null);
-    }
-  }
-
-  // Recompute dirty after a draft change. If the content lands back on exactly the
-  // Spotify mirror, any staged copy only holds the now-cancelled edits — drop it so the
-  // modified indicators (unsaved tag, sidebar dot, Save/Push buttons) clear everywhere.
-  function syncDirty(next: PlaylistFile) {
-    const key = contentKey(next.name, next.description, next.tracks);
-    if (key !== persistedRef.current && key === canonicalRef.current && selected) {
-      persistedRef.current = key;
-      setStaged(false);
-      api
-        .clearStaged(selected)
-        .then(() => void loadList()) // refresh the sidebar's modified dot
-        .catch(() => {}); // a leftover equal-to-mirror staged file is harmless; open() also cleans it
-    }
-    setDirty(key !== persistedRef.current);
-  }
-
-  function edit(tracks: TrackEntry[]) {
-    if (!draft) return;
-    const next = { ...draft, tracks };
-    setDraft(next);
-    syncDirty(next);
-  }
-
-  // Edit the title/description in the draft (staged on Save, applied on Push).
-  function setMeta(patch: Partial<Pick<PlaylistFile, "name" | "description">>) {
-    if (!draft) return;
-    const next = { ...draft, ...patch };
-    setDraft(next);
-    syncDirty(next);
-  }
 
   function removeAt(i: number) {
     if (!draft) return;
@@ -586,35 +381,12 @@ export default function Library() {
     edit(removeTracksByIds(draft.tracks, remove));
   }
 
-  // Persist any in-memory edit (stage it, or clear the staged file if the edits cancelled
-  // out) so the library-wide views read current data. Returns false if persisting failed —
-  // the caller should abort opening the view.
-  async function flushDirtyEdits(): Promise<boolean> {
-    if (!(dirty && draft && selected)) return true;
-    try {
-      // Edits that cancelled out don't warrant a staged file — clear instead of stage.
-      if (contentKey(draft.name, draft.description, draft.tracks) === canonicalRef.current) {
-        await api.clearStaged(selected);
-        setStaged(false);
-      } else {
-        await api.stagePlaylist(selected, draft.name, draft.description, draft.tracks);
-        setStaged(true);
-      }
-      markPersisted(draft.name, draft.description, draft.tracks);
-      setDirty(false);
-      return true;
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-      return false;
-    }
-  }
-
   // Open one of the library-wide panels: stage any pending edits (the panels read from disk,
   // so unsaved work would be invisible to them), show the panel immediately in its loading
   // state, then fill it in. One entry point for all five — the previous five near-identical
   // openers each had to remember to close the other four.
   async function openOverlay(kind: OverlayKind, load: () => Promise<Overlay>) {
-    if (!(await flushDirtyEdits())) return;
+    if (!(await flush())) return;
     setOverlay(emptyOverlay(kind));
     setOverlayBusy(true);
     try {
@@ -729,18 +501,9 @@ export default function Library() {
           staged?.description ?? null,
           deduped
         );
-        if (pl.file === selected) {
-          // This staged behind the open editor's back — sync the in-memory draft, or a
-          // later Save would clobber the normalization with the stale track list.
-          setDraft((d) => {
-            if (!d) return d;
-            // Recording the snapshot here is idempotent, so it's safe in the updater.
-            markPersisted(d.name, d.description, deduped);
-            return { ...d, tracks: deduped };
-          });
-          setDirty(false);
-          setStaged(true);
-        }
+        // This staged behind the open editor's back — sync the in-memory draft, or a
+        // later Save would clobber the normalization with the stale track list.
+        if (pl.file === selected) draftApi.adoptStaged(deduped);
         changed++;
       }
       setStatus({
@@ -811,131 +574,6 @@ export default function Library() {
     edit(move(draft.tracks, from, to));
   }
 
-  async function revert() {
-    if (!selected) return;
-    if (
-      (dirty || staged) &&
-      !(await confirmDialog("Discard your edits and reload the saved version?", "Discard"))
-    )
-      return;
-    const ticket = ++openTicket.current;
-    setBusy("open");
-    setStatus(null);
-    try {
-      await api.clearStaged(selected); // drop cached edits (local, no Spotify call)
-      const pf = await api.readPlaylist(selected); // reload canonical mirror
-      if (ticket !== openTicket.current) return; // user opened another playlist meanwhile
-      setDraft(pf);
-      markPersisted(pf.name, pf.description, pf.tracks);
-      canonicalRef.current = persistedRef.current;
-      setBaseline(pf.tracks);
-      loadFeatures(pf.tracks);
-      setDirty(false);
-      setStaged(false);
-      setStatus({ kind: "ok", msg: "Reverted — edits discarded" });
-      void loadList();
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      if (ticket === openTicket.current) setBusy(null);
-    }
-  }
-
-  async function save() {
-    if (!draft || !selected) return;
-    setBusy("save");
-    setStatus(null);
-    try {
-      if (contentKey(draft.name, draft.description, draft.tracks) === canonicalRef.current) {
-        // Edits cancelled out — nothing differs from the Spotify mirror, so saving would
-        // only create a no-op staged file. Clear any existing one instead.
-        await api.clearStaged(selected);
-        markPersisted(draft.name, draft.description, draft.tracks);
-        setDirty(false);
-        setStaged(false);
-        setStatus({ kind: "ok", msg: "No changes — already matches the Spotify mirror" });
-      } else {
-        // Edits that cancelled out don't warrant a staged file — clear instead of stage.
-        if (contentKey(draft.name, draft.description, draft.tracks) === canonicalRef.current) {
-          await api.clearStaged(selected);
-          setStaged(false);
-        } else {
-          await api.stagePlaylist(selected, draft.name, draft.description, draft.tracks);
-          setStaged(true);
-        }
-        markPersisted(draft.name, draft.description, draft.tracks);
-        setDirty(false);
-        setStatus({ kind: "ok", msg: "Saved (cached locally; not yet pushed to Spotify)" });
-      }
-      void loadList();
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function push() {
-    if (!draft) return;
-    if (!(await confirmDialog(`Push "${draft.name}" to Spotify?`, "Push"))) return;
-    void doPush("safe");
-  }
-
-  async function doPush(strategy: PushStrategy) {
-    if (!draft || !selected) return;
-    const ticket = ++openTicket.current;
-    setBusy("push");
-    setStatus(null);
-    setConflict(null);
-    try {
-      const res = await api.pushPlaylist(
-        selected,
-        draft.name,
-        draft.description,
-        draft.tracks,
-        strategy
-      );
-      if (ticket !== openTicket.current) {
-        // The push itself landed, but the user opened another playlist meanwhile — just
-        // refresh the sidebar instead of overwriting the newer editor state.
-        void loadList();
-        return;
-      }
-      if (res.status === "conflict" && res.conflict) {
-        setConflict(res.conflict);
-        setStatus({
-          kind: "err",
-          msg: "Spotify changed since your last sync — choose how to resolve.",
-        });
-        return;
-      }
-      if (res.playlist) {
-        await followRename(res.file);
-        setDraft(res.playlist);
-        markPersisted(res.playlist.name, res.playlist.description, res.playlist.tracks);
-        canonicalRef.current = persistedRef.current;
-        setBaseline(res.playlist.tracks);
-        setShowDiff(false);
-        setDirty(false);
-        setStaged(false);
-        setSync(null);
-        setStatus(
-          res.warning
-            ? { kind: "warn", msg: res.warning }
-            : {
-                kind: "ok",
-                msg: `Pushed — Spotify now matches (${res.playlist.tracks.length} tracks)`,
-              }
-        );
-        void loadList();
-      }
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      if (ticket === openTicket.current) setBusy(null);
-    }
-  }
-
   // Debounced Spotify search (for adding tracks). Suspended while rate-limited.
   useEffect(() => {
     if (query.trim() === "" || blocked) {
@@ -1000,80 +638,6 @@ export default function Library() {
     () => playlists.filter((p) => p.name.toLowerCase().includes(filter.toLowerCase())),
     [playlists, filter]
   );
-
-  // Live metrics, recomputed locally from the draft + cached features (no network).
-  const featureOf = (t: TrackEntry): Features | undefined => featureMap[bareId(t.id)];
-  const [outlierMode, setOutlierModeState] = useState<OutlierMode>(loadOutlierMode);
-  function setOutlierMode(mode: OutlierMode) {
-    setOutlierModeState(mode);
-    saveOutlierMode(mode);
-  }
-  const aggregates = useMemo(
-    () => (draft ? computeAggregates(draft.tracks, featureOf) : null),
-    [draft, featureMap]
-  );
-  const outlierResult = useMemo(
-    () =>
-      draft
-        ? computeOutliersByMode(outlierMode, draft.tracks, featureOf)
-        : { map: new Map<string, Outlier>(), effective: outlierMode },
-    [draft, featureMap, outlierMode]
-  );
-  const outliers = outlierResult.map;
-  // When a goal is set, flag tracks that deviate from it (this replaces the average-based
-  // outlier flags). Keyed by track id; each entry lists the off-goal dimensions, worst first.
-  const goalDeviations = useMemo(
-    () => (draft && goal ? computeGoalDeviations(draft.tracks, featureOf, goal) : new Map()),
-    [draft, featureMap, goal]
-  );
-
-  // --- Fingerprint goal controls (persisted per playlist in goals.json) ---
-  function updateGoal(next: Goal | null) {
-    setGoalState(next);
-    if (selected) saveGoal(selected, next);
-  }
-  const goalControl: GoalControl = {
-    goal,
-    editing: goalEditing,
-    start: () => {
-      // Seed from the current averages so you adjust from where the playlist already sits.
-      const seed = {} as Goal;
-      for (const k of GOAL_DIMS) {
-        const v = aggregates ? (aggregates[`avg_${k}` as keyof Aggregates] as number | null) : null;
-        seed[k] = v ?? 0.5;
-      }
-      updateGoal(seed);
-      setGoalEditing(true);
-    },
-    edit: () => setGoalEditing(true),
-    done: () => setGoalEditing(false),
-    clear: () => {
-      updateGoal(null);
-      setGoalEditing(false);
-    },
-    setDim: (dim, value) => {
-      if (!goal) return;
-      updateGoal({ ...goal, [dim]: value });
-    },
-  };
-  // True while features for the current playlist are still being fetched — used to show a
-  // brief "analyzing" note instead of flashing the empty-state on a playlist's first view.
-  const metricsLoading = useMemo(
-    () => (draft ? draft.tracks.some((t) => analyzing.has(t.id)) : false),
-    [draft, analyzing]
-  );
-  // Gate the "analyzing…" indicator behind a short delay: the common case resolves in a few
-  // ms, so showing it immediately just flickers on every switch. Only surface it if the load
-  // is genuinely slow (>0.5s).
-  const [showAnalyzing, setShowAnalyzing] = useState(false);
-  useEffect(() => {
-    if (!metricsLoading) {
-      setShowAnalyzing(false);
-      return;
-    }
-    const t = setTimeout(() => setShowAnalyzing(true), 500);
-    return () => clearTimeout(t);
-  }, [metricsLoading]);
 
   // Inline diff of the draft against the Spotify mirror — drives the "Show changes" review.
   const diff = useMemo(
@@ -1535,7 +1099,7 @@ export default function Library() {
               )}
               {filtered.length === 0 && (
                 <p className="hint pad">
-                  {busy === "load" ? "Loading…" : "No playlists. Pull them in Setup first."}
+                  {listBusy ? "Loading…" : "No playlists. Pull them in Setup first."}
                 </p>
               )}
             </>
@@ -1774,7 +1338,7 @@ export default function Library() {
                   <button className="btn ghost small" onClick={pullRemote} disabled={blocked}>
                     Pull Spotify's version
                   </button>
-                  <button className="link" onClick={() => setSync(null)}>
+                  <button className="link" onClick={draftApi.dismissSync}>
                     Dismiss
                   </button>
                 </span>
@@ -1846,7 +1410,7 @@ export default function Library() {
                         goal={goalControl}
                         outlierCtl={{
                           mode: outlierMode,
-                          effective: outlierResult.effective,
+                          effective: metrics.outlierEffective,
                           setMode: setOutlierMode,
                         }}
                       />
@@ -2144,9 +1708,9 @@ export default function Library() {
       {conflict && (
         <ConflictModal
           conflict={conflict}
-          onMerge={() => void doPush("merge")}
-          onOverwrite={() => void doPush("overwrite")}
-          onClose={() => setConflict(null)}
+          onMerge={() => void draftApi.resolveConflict("merge")}
+          onOverwrite={() => void draftApi.resolveConflict("overwrite")}
+          onClose={draftApi.dismissConflict}
         />
       )}
     </div>
