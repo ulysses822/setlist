@@ -22,7 +22,11 @@ The refresh token never touches disk — it goes to the Windows Credential Manag
 sees either one. It gets a separate streaming-scoped token instead, so a compromised renderer
 can control playback but can't read or modify a playlist (`src-tauri/src/spotify/auth.rs`).
 That holds even when the streaming grant is missing: there is no fallback to the main token,
-so a failed grant means the player reports it and stays dead until you reconnect.
+so a failed grant means the player reports it and stays dead until you reconnect. The two
+families share one refresh routine parameterised by which family it is for, so the scopes each
+one carries are the only thing separating them — and that is checked rather than described: the
+build fails if the families stop being independently revocable, and the tests fail if a
+playlist scope ever appears in the list the webview's token is minted from.
 
 The client secret is the one credential that has to pass through the webview, because a
 keyboard is the only place it can come from. It transits rather than resides: it is held in a

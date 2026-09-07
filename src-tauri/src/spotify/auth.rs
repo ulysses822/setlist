@@ -233,21 +233,98 @@ async fn store_access(state: &AppState, token: &TokenResponse) {
     }
 }
 
-/// Return a valid access token, refreshing from the stored refresh token if needed.
+/// What the webview is told when we have no streaming grant to give it. Playback is the only
+/// thing affected; every other feature runs off the main token, which stays in this process.
+/// Deliberately doesn't say "click Connect" — connecting means going to Setup, starting an
+/// authorization, approving it in a browser and coming back. Naming one click undersells it,
+/// and leaves someone hunting for a button that isn't on the screen they're looking at.
+pub(crate) const NOT_CONNECTED: &str =
+    "Not connected to Spotify. Connect your account from the Setup tab.";
+
+pub(crate) const NO_STREAMING_GRANT: &str =
+    "In-app playback isn't authorized yet — open Setup and click Connect Spotify to grant it. \
+     Everything else works without it.";
+
+/// Everything that differs between the two token families.
 ///
-/// The token mutex is held across the whole refresh (single-flight): if several
-/// commands need a token at once, only the first refreshes and the rest wait for it.
-/// This avoids two concurrent refreshes reusing the same rotating refresh token,
-/// which would trip Spotify's reuse detection and invalidate the whole token family.
-pub(crate) async fn ensure_token(state: &AppState, client_id: &str) -> Result<String, String> {
-    let mut guard = state.token.lock().await;
+/// The families are deliberately separate (see the module docs): the main one carries every
+/// scope the backend needs and never crosses IPC, the streaming one carries only what the Web
+/// Playback SDK needs and is the only token the webview ever sees. Naming the differences in
+/// one value means the refresh mechanism is written once, so a later change to how refreshing
+/// works — a backoff, a scope assertion — lands on both families or neither. Two hand-kept
+/// copies could drift silently, and one of these is the boundary the webview sits behind.
+struct Family {
+    /// Keychain entry holding this family's refresh token.
+    user: &'static str,
+    /// Reported when there is no stored refresh token at all.
+    missing: &'static str,
+    /// Reported when Spotify says the stored token is dead.
+    revoked: &'static str,
+    /// Prefixes an otherwise-unexplained HTTP failure.
+    label: &'static str,
+    /// Whether a granted-scope response is recorded on `AppState` (only the main family's
+    /// scope is ever inspected — see `probe_write`).
+    records_scope: bool,
+    /// Whether a dead token takes the other family down with it. The main token going means
+    /// the whole session is gone; the streaming one going leaves everything but playback.
+    revokes_everything: bool,
+}
+
+const MAIN: Family = Family {
+    user: KEYRING_USER,
+    missing: NOT_CONNECTED,
+    revoked: "Spotify session expired or was revoked — click Connect to sign in again.",
+    label: "Token refresh failed",
+    records_scope: true,
+    revokes_everything: true,
+};
+
+const STREAMING: Family = Family {
+    user: KEYRING_USER_STREAMING,
+    missing: NO_STREAMING_GRANT,
+    revoked: "Playback session expired — reconnect Spotify in Setup to restore in-app playback.",
+    label: "Streaming token refresh failed",
+    records_scope: false,
+    revokes_everything: false,
+};
+
+// The parts of the two families that are decidable at compile time, so getting them wrong
+// fails the build rather than waiting for someone to run the tests. The rest of the
+// separation (distinct keychain entries, distinct messages) is asserted in the tests below,
+// where string comparison is available.
+const _: () = assert!(
+    MAIN.revokes_everything,
+    "the main token is the session: losing it must clear the streaming family too"
+);
+const _: () = assert!(
+    !STREAMING.revokes_everything,
+    "a dead player must not log the whole app out"
+);
+const _: () = assert!(
+    MAIN.records_scope && !STREAMING.records_scope,
+    "probe_write reads the main family's granted scope; the streaming one would overwrite it"
+);
+
+/// Return a valid access token for `family`, refreshing from its stored refresh token if needed.
+///
+/// `cache` is that family's slot on `AppState`, and its mutex is held across the whole refresh
+/// (single-flight): if several commands need a token at once, only the first refreshes and the
+/// rest wait for it. That matters because Spotify rotates refresh tokens — two concurrent
+/// refreshes would reuse the same one, trip reuse detection, and invalidate the whole family.
+async fn ensure(
+    state: &AppState,
+    client_id: &str,
+    family: &Family,
+    cache: &tokio::sync::Mutex<Option<CachedToken>>,
+) -> Result<String, String> {
+    let mut guard = cache.lock().await;
     if let Some(t) = guard.as_ref() {
         if Instant::now() < t.expires_at {
             return Ok(t.value.clone());
         }
     }
 
-    let refresh = load_refresh_token(KEYRING_USER)?.ok_or_else(|| NOT_CONNECTED.to_string())?;
+    let refresh = load_refresh_token(family.user)?.ok_or_else(|| family.missing.to_string())?;
 
     let resp = state
         .http
@@ -267,23 +344,23 @@ pub(crate) async fn ensure_token(state: &AppState, client_id: &str) -> Result<St
         // password change, or rotation reuse) — it can never work again. Drop it so the UI
         // stops looking "connected" and asks for a fresh login instead of erroring forever.
         if body.contains("invalid_grant") {
-            let _ = logout();
-            return Err(
-                "Spotify session expired or was revoked — click Connect to sign in again.".into(),
-            );
+            if family.revokes_everything {
+                let _ = logout();
+            } else {
+                // Only this family is dead — leave the other alone; the next Connect re-mints it.
+                let _ = delete_refresh_token(family.user);
+            }
+            return Err(family.revoked.to_string());
         }
-        return Err(format!(
-            "Token refresh failed (HTTP {status}): {}",
-            body.trim()
-        ));
+        return Err(format!("{} (HTTP {status}): {}", family.label, body.trim()));
     }
     let token: TokenResponse = resp.json().await.map_err(err)?;
 
     // Spotify rotates the refresh token; persist the new one when present.
     if let Some(rt) = &token.refresh_token {
-        store_refresh_token(KEYRING_USER, rt)?;
+        store_refresh_token(family.user, rt)?;
     }
-    if token.scope.is_some() {
+    if family.records_scope && token.scope.is_some() {
         *state.granted_scope.lock().await = token.scope.clone();
     }
     let value = token.access_token.clone();
@@ -294,111 +371,71 @@ pub(crate) async fn ensure_token(state: &AppState, client_id: &str) -> Result<St
     Ok(value)
 }
 
-/// What the webview is told when we have no streaming grant to give it. Playback is the only
-/// thing affected; every other feature runs off the main token, which stays in this process.
-/// Deliberately doesn't say "click Connect" — connecting means going to Setup, starting an
-/// authorization, approving it in a browser and coming back. Naming one click undersells it,
-/// and leaves someone hunting for a button that isn't on the screen they're looking at.
-pub(crate) const NOT_CONNECTED: &str =
-    "Not connected to Spotify. Connect your account from the Setup tab.";
-
-pub(crate) const NO_STREAMING_GRANT: &str =
-    "In-app playback isn't authorized yet — open Setup and click Connect Spotify to grant it. \
-     Everything else works without it.";
+/// A valid access token for the backend's own calls. Never handed to the webview.
+pub(crate) async fn ensure_token(state: &AppState, client_id: &str) -> Result<String, String> {
+    ensure(state, client_id, &MAIN, &state.token).await
+}
 
 /// Return a valid **streaming-scoped** access token — the only token ever exposed to the
 /// webview (the Web Playback SDK needs one, and handing it the full-scope main token would
-/// let any script in the webview modify playlists). Same single-flight refresh pattern as
-/// `ensure_token`, against its own keychain entry.
+/// let any script in the webview modify playlists).
 ///
 /// There is deliberately **no fallback to the main token**. A missing streaming entry means
 /// the second authorization in `login` never completed, and the honest answer is that the
 /// player is unavailable until the user reconnects. Quietly substituting the main token would
 /// hand the webview `playlist-modify-*` to spare it an error message, turning the one security
-/// boundary this app advertises into something that fails open without saying so.
+/// boundary this app advertises into something that fails open without saying so. Nothing in
+/// `ensure` can produce that substitution: the family it is given decides everything.
 pub(crate) async fn ensure_streaming_token(
     state: &AppState,
     client_id: &str,
 ) -> Result<String, String> {
-    let mut guard = state.streaming_token.lock().await;
-    if let Some(t) = guard.as_ref() {
-        if Instant::now() < t.expires_at {
-            return Ok(t.value.clone());
-        }
-    }
-
-    let refresh = load_refresh_token(KEYRING_USER_STREAMING)?
-        .ok_or_else(|| NO_STREAMING_GRANT.to_string())?;
-
-    let resp = state
-        .http
-        .post(TOKEN_URL)
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh.as_str()),
-            ("client_id", client_id),
-        ])
-        .send()
-        .await
-        .map_err(err)?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        if body.contains("invalid_grant") {
-            // Only the streaming family is dead — leave the main session alone; the next
-            // Connect re-mints it.
-            let _ = delete_refresh_token(KEYRING_USER_STREAMING);
-            return Err(
-                "Playback session expired — reconnect Spotify in Setup to restore in-app playback."
-                    .into(),
-            );
-        }
-        return Err(format!(
-            "Streaming token refresh failed (HTTP {status}): {}",
-            body.trim()
-        ));
-    }
-    let token: TokenResponse = resp.json().await.map_err(err)?;
-
-    if let Some(rt) = &token.refresh_token {
-        store_refresh_token(KEYRING_USER_STREAMING, rt)?;
-    }
-    let value = token.access_token.clone();
-    *guard = Some(CachedToken {
-        value: value.clone(),
-        expires_at: Instant::now() + Duration::from_secs(token.expires_in.saturating_sub(60)),
-    });
-    Ok(value)
+    ensure(state, client_id, &STREAMING, &state.streaming_token).await
 }
 
-// ---------------------------------------------------------------------------
-// Public: login
-// ---------------------------------------------------------------------------
+/// Build Spotify's authorize URL. `challenge` is present for a PKCE grant and absent for the
+/// confidential one (`mint_history_token`), which authenticates at the token exchange instead.
+///
+/// One builder rather than three copies of the format string: each copy is another chance to
+/// drop an `encode`, and an unencoded scope list or client id silently changes what is being
+/// asked for rather than failing.
+fn authorize_url(client_id: &str, scopes: &str, csrf: &str, challenge: Option<&str>) -> String {
+    // The challenge is base64url and the csrf comes from `random_string`'s URL-safe alphabet,
+    // so neither needs escaping; the caller-supplied id and scopes very much do.
+    let pkce = match challenge {
+        Some(c) => format!("&code_challenge_method=S256&code_challenge={c}"),
+        None => String::new(),
+    };
+    format!(
+        "{AUTH_URL}?response_type=code&client_id={}&redirect_uri={}{pkce}&state={csrf}&scope={}",
+        urlencoding::encode(client_id),
+        urlencoding::encode(REDIRECT_URI),
+        urlencoding::encode(scopes),
+    )
+}
 
-pub async fn login(state: &AppState, client_id: String) -> Result<Profile, String> {
+/// Run one PKCE authorization end to end: open the consent page, catch the loopback redirect,
+/// and exchange the code. The app makes two of these — the main login and the streaming-only
+/// grant — and they differ solely in which scopes they ask for.
+async fn pkce_grant(
+    state: &AppState,
+    client_id: &str,
+    scopes: &str,
+) -> Result<TokenResponse, String> {
     let verifier = random_string(64);
     let challenge = code_challenge(&verifier);
     let csrf = random_string(16);
+    let url = authorize_url(client_id, scopes, &csrf, Some(&challenge));
+    let code = authorize_via_browser(url, csrf).await?;
 
-    let auth_url = format!(
-        "{AUTH_URL}?response_type=code&client_id={}&redirect_uri={}&code_challenge_method=S256&code_challenge={}&state={}&scope={}",
-        urlencoding::encode(&client_id),
-        urlencoding::encode(REDIRECT_URI),
-        challenge,
-        csrf,
-        urlencoding::encode(SCOPES),
-    );
-
-    let code = authorize_via_browser(auth_url, csrf).await?;
-
-    let token: TokenResponse = state
+    state
         .http
         .post(TOKEN_URL)
         .form(&[
             ("grant_type", "authorization_code"),
             ("code", code.as_str()),
             ("redirect_uri", REDIRECT_URI),
-            ("client_id", client_id.as_str()),
+            ("client_id", client_id),
             ("code_verifier", verifier.as_str()),
         ])
         .send()
@@ -408,7 +445,15 @@ pub async fn login(state: &AppState, client_id: String) -> Result<Profile, Strin
         .map_err(err)?
         .json()
         .await
-        .map_err(err)?;
+        .map_err(err)
+}
+
+// ---------------------------------------------------------------------------
+// Public: login
+// ---------------------------------------------------------------------------
+
+pub async fn login(state: &AppState, client_id: String) -> Result<Profile, String> {
+    let token = pkce_grant(state, &client_id, SCOPES).await?;
 
     let refresh = token
         .refresh_token
@@ -438,39 +483,7 @@ pub async fn login(state: &AppState, client_id: String) -> Result<Profile, Strin
 /// Mint the streaming-only token family (see `ensure_streaming_token` for why it exists):
 /// a PKCE grant carrying just `STREAMING_SCOPES`, stored under its own keychain entry.
 async fn mint_streaming_grant(state: &AppState, client_id: &str) -> Result<(), String> {
-    let verifier = random_string(64);
-    let challenge = code_challenge(&verifier);
-    let csrf = random_string(16);
-
-    let auth_url = format!(
-        "{AUTH_URL}?response_type=code&client_id={}&redirect_uri={}&code_challenge_method=S256&code_challenge={}&state={}&scope={}",
-        urlencoding::encode(client_id),
-        urlencoding::encode(REDIRECT_URI),
-        challenge,
-        csrf,
-        urlencoding::encode(STREAMING_SCOPES),
-    );
-
-    let code = authorize_via_browser(auth_url, csrf).await?;
-
-    let token: TokenResponse = state
-        .http
-        .post(TOKEN_URL)
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("code", code.as_str()),
-            ("redirect_uri", REDIRECT_URI),
-            ("client_id", client_id),
-            ("code_verifier", verifier.as_str()),
-        ])
-        .send()
-        .await
-        .map_err(err)?
-        .error_for_status()
-        .map_err(err)?
-        .json()
-        .await
-        .map_err(err)?;
+    let token = pkce_grant(state, client_id, STREAMING_SCOPES).await?;
 
     let refresh = token
         .refresh_token
@@ -522,14 +535,7 @@ pub async fn mint_history_token(
 
     // No code_challenge: this is the confidential flow, authenticated at token exchange by
     // the client secret rather than PKCE.
-    let auth_url = format!(
-        "{AUTH_URL}?response_type=code&client_id={}&redirect_uri={}&state={}&scope={}",
-        urlencoding::encode(&client_id),
-        urlencoding::encode(REDIRECT_URI),
-        csrf,
-        urlencoding::encode("user-read-recently-played"),
-    );
-
+    let auth_url = authorize_url(&client_id, "user-read-recently-played", &csrf, None);
     let code = authorize_via_browser(auth_url, csrf).await?;
 
     let token: TokenResponse = state
@@ -558,6 +564,59 @@ pub async fn mint_history_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The boundary SECURITY.md advertises, asserted rather than described: the token the
+    /// webview is given can drive playback and nothing else. It is a property of these two
+    /// constants alone, so a scope added to the wrong list would hand a compromised renderer
+    /// playlist writes with nothing failing to compile.
+    #[test]
+    fn the_webview_token_cannot_reach_a_playlist() {
+        for scope in STREAMING_SCOPES.split_whitespace() {
+            assert!(
+                !scope.starts_with("playlist-") && !scope.starts_with("user-modify"),
+                "{scope} must not be in the token handed to the webview"
+            );
+        }
+        assert!(
+            STREAMING_SCOPES
+                .split_whitespace()
+                .any(|s| s == "streaming"),
+            "without `streaming` the SDK token is useless and playback dies"
+        );
+    }
+
+    /// And the backend's own token deliberately excludes `streaming`, so the SDK scope only
+    /// ever arrives through the family above.
+    #[test]
+    fn the_backend_token_does_not_carry_the_sdk_scope() {
+        assert!(!SCOPES.split_whitespace().any(|s| s == "streaming"));
+    }
+
+    /// Two families mean two keychain entries and two verdicts. Sharing an entry would let a
+    /// streaming refresh rotate the main token out from under the backend; sharing the
+    /// revocation rule would let a dead player log the whole app out.
+    #[test]
+    fn the_families_stay_separable() {
+        assert_ne!(MAIN.user, STREAMING.user);
+        assert_ne!(MAIN.missing, STREAMING.missing);
+        assert_ne!(MAIN.revoked, STREAMING.revoked);
+    }
+
+    #[test]
+    fn the_authorize_url_carries_a_challenge_only_for_a_pkce_grant() {
+        let pkce = authorize_url("my id", "a b", "csrf", Some("chal"));
+        assert!(pkce.contains("code_challenge_method=S256"), "{pkce}");
+        assert!(pkce.contains("code_challenge=chal"), "{pkce}");
+        assert!(pkce.contains("state=csrf"), "{pkce}");
+        // Spaces must be escaped, or the scope list ends at the first one and the request asks
+        // for something other than what the caller passed.
+        assert!(pkce.contains("scope=a%20b"), "{pkce}");
+        assert!(pkce.contains("client_id=my%20id"), "{pkce}");
+
+        // The confidential flow (mint_history_token) authenticates at the token exchange.
+        let confidential = authorize_url("id", "a", "csrf", None);
+        assert!(!confidential.contains("code_challenge"), "{confidential}");
+    }
 
     #[test]
     fn the_listener_path_matches_the_registered_redirect() {
