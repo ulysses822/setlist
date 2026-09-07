@@ -143,9 +143,9 @@ fn wait_for_code(server: &tiny_http::Server, expected_state: &str) -> Result<Str
             Err(e) => return Err(format!("Loopback server error: {e}")),
         };
         let url = request.url().to_string(); // e.g. "/callback?code=...&state=..."
-        // Answer only on the registered redirect path, carrying a query. Everything else on
-        // this port — a browser's /favicon.ico, a drive-by page probing localhost — gets the
-        // neutral holding page and is ignored, without disturbing the login in progress.
+                                             // Answer only on the registered redirect path, carrying a query. Everything else on
+                                             // this port — a browser's /favicon.ico, a drive-by page probing localhost — gets the
+                                             // neutral holding page and is ignored, without disturbing the login in progress.
         let Some(query) = url
             .split_once('?')
             .filter(|(path, _)| *path == REDIRECT_PATH)
@@ -273,7 +273,10 @@ pub(crate) async fn ensure_token(state: &AppState, client_id: &str) -> Result<St
                 "Spotify session expired or was revoked — click Connect to sign in again.".into(),
             );
         }
-        return Err(format!("Token refresh failed (HTTP {status}): {}", body.trim()));
+        return Err(format!(
+            "Token refresh failed (HTTP {status}): {}",
+            body.trim()
+        ));
     }
     let token: TokenResponse = resp.json().await.map_err(err)?;
 
@@ -319,8 +322,8 @@ pub(crate) async fn ensure_streaming_token(
         }
     }
 
-    let refresh =
-        load_refresh_token(KEYRING_USER_STREAMING)?.ok_or_else(|| NO_STREAMING_GRANT.to_string())?;
+    let refresh = load_refresh_token(KEYRING_USER_STREAMING)?
+        .ok_or_else(|| NO_STREAMING_GRANT.to_string())?;
 
     let resp = state
         .http
@@ -506,7 +509,9 @@ pub async fn mint_history_token(
     client_secret: String,
 ) -> Result<String, String> {
     if client_secret.trim().is_empty() {
-        return Err("A Spotify client secret is required to mint a non-rotating token.".to_string());
+        return Err(
+            "A Spotify client secret is required to mint a non-rotating token.".to_string(),
+        );
     }
     let csrf = random_string(16);
 

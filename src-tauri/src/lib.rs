@@ -294,7 +294,13 @@ fn stage_playlist(
     tracks: Vec<TrackEntry>,
 ) -> Result<(), String> {
     let data_dir = config::resolve_data_dir(&config::load(&app)?)?;
-    spotify::stage_local(config::staging_dir(&data_dir)?, file, name, description, tracks)
+    spotify::stage_local(
+        config::staging_dir(&data_dir)?,
+        file,
+        name,
+        description,
+        tracks,
+    )
 }
 
 #[tauri::command(async)]
@@ -450,7 +456,15 @@ async fn push_playlist(
     let (client_id, data_dir) = require_client_id_and_data_dir(&app)?;
     let staging = config::staging_dir(&data_dir)?;
     spotify::push_playlist(
-        &state, client_id, data_dir, staging, file, name, description, tracks, strategy,
+        &state,
+        client_id,
+        data_dir,
+        staging,
+        file,
+        name,
+        description,
+        tracks,
+        strategy,
     )
     .await
 }

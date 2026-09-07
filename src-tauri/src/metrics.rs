@@ -96,7 +96,10 @@ fn recently_missed(
     misses
         .get(key)
         .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
-        .map(|t| now.signed_duration_since(t.with_timezone(&chrono::Utc)) < chrono::Duration::days(MISS_TTL_DAYS))
+        .map(|t| {
+            now.signed_duration_since(t.with_timezone(&chrono::Utc))
+                < chrono::Duration::days(MISS_TTL_DAYS)
+        })
         .unwrap_or(false)
 }
 
@@ -107,11 +110,17 @@ fn bare_id(uri: &str) -> Option<String> {
     if uri.starts_with("spotify:local:") {
         return Some(uri.to_string());
     }
-    uri.rsplit(':').next().filter(|s| !s.is_empty()).map(str::to_string)
+    uri.rsplit(':')
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 fn spotify_id_from_href(href: &str) -> Option<String> {
-    href.rsplit('/').next().filter(|s| !s.is_empty()).map(str::to_string)
+    href.rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
 }
 
 async fn fetch_features(http: &reqwest::Client, reccobeats_id: &str) -> Option<Features> {
@@ -122,7 +131,12 @@ async fn fetch_features(http: &reqwest::Client, reccobeats_id: &str) -> Option<F
         "{RECCO}/track/{}/audio-features",
         urlencoding::encode(reccobeats_id)
     );
-    let resp = http.get(&url).header("Accept", "application/json").send().await.ok()?;
+    let resp = http
+        .get(&url)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .ok()?;
     if !resp.status().is_success() {
         return None;
     }
@@ -204,7 +218,12 @@ pub async fn features_for(
                 .collect::<Vec<_>>()
                 .join("&");
             let url = format!("{RECCO}/track?{query}");
-            if let Ok(resp) = http.get(&url).header("Accept", "application/json").send().await {
+            if let Ok(resp) = http
+                .get(&url)
+                .header("Accept", "application/json")
+                .send()
+                .await
+            {
                 if let Ok(rr) = resp.json::<ResolveResp>().await {
                     any_resolve_ok = true;
                     for item in rr.content {
@@ -212,7 +231,9 @@ pub async fn features_for(
                             .isrc
                             .as_deref()
                             .and_then(|i| by_isrc.get(i))
-                            .or_else(|| spotify_id_from_href(&item.href).and_then(|s| by_sid.get(&s)))
+                            .or_else(|| {
+                                spotify_id_from_href(&item.href).and_then(|s| by_sid.get(&s))
+                            })
                             .cloned();
                         if let Some(k) = key {
                             // Same ISRC can return several releases — keep the first.
@@ -279,4 +300,3 @@ pub async fn features_for(
     }
     Ok(out)
 }
-

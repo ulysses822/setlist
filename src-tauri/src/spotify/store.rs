@@ -114,7 +114,11 @@ pub(crate) fn save_sync_meta(data_dir: &Path, store: &SyncMetaStore) -> Result<(
 
 /// Upsert one playlist's sync metadata. No-op for locally-created playlists (empty Spotify id)
 /// — they have nothing to key on and no meaningful snapshot/cover until first push.
-pub(crate) fn upsert_sync_meta(data_dir: &Path, spotify_id: &str, meta: SyncMeta) -> Result<(), String> {
+pub(crate) fn upsert_sync_meta(
+    data_dir: &Path,
+    spotify_id: &str,
+    meta: SyncMeta,
+) -> Result<(), String> {
     if spotify_id.is_empty() {
         return Ok(());
     }
@@ -164,8 +168,7 @@ pub(crate) fn write_playlist(
 pub(crate) fn read_playlist_cached(path: &std::path::Path) -> Option<std::sync::Arc<PlaylistFile>> {
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::SystemTime;
-    type Cache =
-        Mutex<std::collections::HashMap<PathBuf, (SystemTime, u64, Arc<PlaylistFile>)>>;
+    type Cache = Mutex<std::collections::HashMap<PathBuf, (SystemTime, u64, Arc<PlaylistFile>)>>;
     static CACHE: OnceLock<Cache> = OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
 
@@ -199,7 +202,9 @@ pub(crate) fn read_playlist_cached(path: &std::path::Path) -> Option<std::sync::
 }
 
 /// Set of existing `*.json` filenames in the playlists dir (for unique-name seeding).
-pub(crate) fn existing_filenames(dir: &std::path::Path) -> Result<std::collections::HashSet<String>, String> {
+pub(crate) fn existing_filenames(
+    dir: &std::path::Path,
+) -> Result<std::collections::HashSet<String>, String> {
     let mut set = std::collections::HashSet::new();
     if dir.exists() {
         for entry in std::fs::read_dir(dir).map_err(err)? {
@@ -586,7 +591,11 @@ pub fn stage_local(
 ) -> Result<(), String> {
     std::fs::create_dir_all(&staging_dir).map_err(err)?;
     let path = staged_path(&staging_dir, &file)?;
-    let edit = StagedEdit { name, description, tracks };
+    let edit = StagedEdit {
+        name,
+        description,
+        tracks,
+    };
     write_atomic(&path, &serde_json::to_string_pretty(&edit).map_err(err)?)
 }
 
@@ -676,10 +685,7 @@ pub fn load_archived(data_dir: &Path) -> std::collections::HashSet<String> {
         .unwrap_or_default()
 }
 
-fn save_archived(
-    data_dir: &Path,
-    set: &std::collections::HashSet<String>,
-) -> Result<(), String> {
+fn save_archived(data_dir: &Path, set: &std::collections::HashSet<String>) -> Result<(), String> {
     let mut v: Vec<&String> = set.iter().collect();
     v.sort();
     write_atomic(
@@ -709,10 +715,7 @@ pub fn load_pinned(data_dir: &Path) -> std::collections::HashSet<String> {
         .unwrap_or_default()
 }
 
-fn save_pinned(
-    data_dir: &Path,
-    set: &std::collections::HashSet<String>,
-) -> Result<(), String> {
+fn save_pinned(data_dir: &Path, set: &std::collections::HashSet<String>) -> Result<(), String> {
     let mut v: Vec<&String> = set.iter().collect();
     v.sort();
     write_atomic(
@@ -951,7 +954,10 @@ mod tests {
         std::fs::write(staging_dir.join("mix.json"), "{ not json").unwrap();
 
         let listed = list_local(data_dir, staging_dir).unwrap();
-        assert!(listed[0].modified, "the dot must survive a staged file we can't read");
+        assert!(
+            listed[0].modified,
+            "the dot must survive a staged file we can't read"
+        );
         assert_eq!(listed[0].name, "Mixtape");
         assert_eq!(listed[0].track_count, 1);
     }
@@ -959,26 +965,55 @@ mod tests {
     #[test]
     fn a_renamed_playlist_takes_its_file_and_its_saved_state_with_it() {
         let (data_dir, staging_dir) = temp_dirs("rename");
-        write_playlist(&data_dir, "jog.json", &playlist("pid1", "Jogging Music", vec![])).unwrap();
+        write_playlist(
+            &data_dir,
+            "jog.json",
+            &playlist("pid1", "Jogging Music", vec![]),
+        )
+        .unwrap();
 
-        stage_local(staging_dir.clone(), "jog.json".into(), None, None, vec![track("a")]).unwrap();
+        stage_local(
+            staging_dir.clone(),
+            "jog.json".into(),
+            None,
+            None,
+            vec![track("a")],
+        )
+        .unwrap();
         set_archived(data_dir.clone(), "jog.json".into(), true).unwrap();
         set_pinned(data_dir.clone(), "jog.json".into(), true).unwrap();
-        save_goals(&data_dir, &serde_json::json!({ "jog.json": { "valence": 0.8 } })).unwrap();
-        save_ui_state(&data_dir, &serde_json::json!({ "cols": { "jog.json": ["tempo"] } })).unwrap();
+        save_goals(
+            &data_dir,
+            &serde_json::json!({ "jog.json": { "valence": 0.8 } }),
+        )
+        .unwrap();
+        save_ui_state(
+            &data_dir,
+            &serde_json::json!({ "cols": { "jog.json": ["tempo"] } }),
+        )
+        .unwrap();
 
-        let file =
-            write_playlist(&data_dir, "jog.json", &playlist("pid1", "Favourite Beats", vec![]))
-                .unwrap();
+        let file = write_playlist(
+            &data_dir,
+            "jog.json",
+            &playlist("pid1", "Favourite Beats", vec![]),
+        )
+        .unwrap();
 
         assert_eq!(file, "favourite-beats.json");
         assert!(!data_dir.join("playlists").join("jog.json").exists());
         assert!(data_dir.join("playlists").join(&file).exists());
-        assert!(staging_dir.join(&file).exists(), "the unpushed draft moved too");
+        assert!(
+            staging_dir.join(&file).exists(),
+            "the unpushed draft moved too"
+        );
         assert!(!staging_dir.join("jog.json").exists());
         assert!(load_archived(&data_dir).contains(&file));
         assert!(load_pinned(&data_dir).contains(&file));
-        assert_eq!(load_goals(&data_dir)["favourite-beats.json"]["valence"], 0.8);
+        assert_eq!(
+            load_goals(&data_dir)["favourite-beats.json"]["valence"],
+            0.8
+        );
         assert_eq!(
             load_ui_state(&data_dir)["cols"]["favourite-beats.json"],
             serde_json::json!(["tempo"])
@@ -994,8 +1029,8 @@ mod tests {
         // The second playlist is genuinely called "Jazz" too; its `-2` is how they were told
         // apart, not drift. Re-syncing it must leave it alone rather than start a fight over
         // `jazz.json` that churns the repo on every pull.
-        let file = write_playlist(&data_dir, "jazz-2.json", &playlist("pid2", "Jazz", vec![]))
-            .unwrap();
+        let file =
+            write_playlist(&data_dir, "jazz-2.json", &playlist("pid2", "Jazz", vec![])).unwrap();
         assert_eq!(file, "jazz-2.json");
         assert!(data_dir.join("playlists").join("jazz.json").exists());
     }
@@ -1004,12 +1039,22 @@ mod tests {
     fn renaming_onto_a_taken_name_takes_the_next_one() {
         let (data_dir, _staging) = temp_dirs("collide");
         write_playlist(&data_dir, "rock.json", &playlist("pid1", "Rock", vec![])).unwrap();
-        write_playlist(&data_dir, "jog.json", &playlist("pid2", "Jogging Music", vec![])).unwrap();
+        write_playlist(
+            &data_dir,
+            "jog.json",
+            &playlist("pid2", "Jogging Music", vec![]),
+        )
+        .unwrap();
 
-        let file = write_playlist(&data_dir, "jog.json", &playlist("pid2", "Rock", vec![])).unwrap();
+        let file =
+            write_playlist(&data_dir, "jog.json", &playlist("pid2", "Rock", vec![])).unwrap();
 
         assert_eq!(file, "rock-2.json");
-        let untouched = std::fs::read_to_string(data_dir.join("playlists").join("rock.json")).unwrap();
-        assert!(untouched.contains("pid1"), "the playlist already called Rock must not be hit");
+        let untouched =
+            std::fs::read_to_string(data_dir.join("playlists").join("rock.json")).unwrap();
+        assert!(
+            untouched.contains("pid1"),
+            "the playlist already called Rock must not be hit"
+        );
     }
 }

@@ -73,6 +73,12 @@ jobs:
       # builds serve the frontend from `devUrl`, so `dist/` needn't exist to compile or test.
       # Rust is preinstalled on the runner, so the third-party surface stays at the two pinned
       # actions above.
+      # Runs before clippy because it's the cheapest failure to fix and the noisiest to
+      # leave: without a gate, every contributor's format-on-save lands as unrelated diff.
+      - name: Formatting
+        run: cargo fmt --check
+        working-directory: src-tauri
+
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
         working-directory: src-tauri

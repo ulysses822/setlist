@@ -112,22 +112,38 @@ pub fn status(dir: &Path) -> Result<RepoStatus, String> {
         );
     }
 
-    let branch = run_ok(dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|_| "HEAD".into());
+    let branch =
+        run_ok(dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|_| "HEAD".into());
     let has_remote = !run_ok(dir, &["remote"]).unwrap_or_default().is_empty();
-    let has_upstream = run(dir, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let has_upstream = run(
+        dir,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .map(|o| o.status.success())
+    .unwrap_or(false);
     // "Ahead" only means something when there's somewhere to push to.
-    let ahead = if has_remote { ahead_count(dir, &branch, has_upstream) } else { 0 };
+    let ahead = if has_remote {
+        ahead_count(dir, &branch, has_upstream)
+    } else {
+        0
+    };
 
-    let name_set = run_ok(dir, &["config", "user.name"]).map(|s| !s.is_empty()).unwrap_or(false);
-    let email_set = run_ok(dir, &["config", "user.email"]).map(|s| !s.is_empty()).unwrap_or(false);
+    let name_set = run_ok(dir, &["config", "user.name"])
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    let email_set = run_ok(dir, &["config", "user.email"])
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
 
     let details = changes(dir)?;
     let clean = details.is_empty();
     let changes = details
         .into_iter()
-        .map(|d| FileChange { path: d.path, kind: d.kind.label().into(), summary: d.summary })
+        .map(|d| FileChange {
+            path: d.path,
+            kind: d.kind.label().into(),
+            summary: d.summary,
+        })
         .collect();
 
     Ok(RepoStatus {
@@ -281,7 +297,13 @@ fn changes(dir: &Path) -> Result<Vec<ChangeDetail>, String> {
         } else {
             (label_for(&path, kind), None)
         };
-        out.push(ChangeDetail { path, kind, summary, body, is_playlist });
+        out.push(ChangeDetail {
+            path,
+            kind,
+            summary,
+            body,
+            is_playlist,
+        });
     }
     Ok(out)
 }
@@ -307,8 +329,12 @@ fn paired_renames(
     if vacated.is_empty() {
         return pairs;
     }
-    for (path, _) in rows.iter().filter(|(p, k)| matches!(k, ChangeKind::Added) && is_playlist_path(p)) {
-        if let Some(from) = working_playlist(dir, path).and_then(|pf| vacated.remove(&pf.spotify_id))
+    for (path, _) in rows
+        .iter()
+        .filter(|(p, k)| matches!(k, ChangeKind::Added) && is_playlist_path(p))
+    {
+        if let Some(from) =
+            working_playlist(dir, path).and_then(|pf| vacated.remove(&pf.spotify_id))
         {
             pairs.insert(path.clone(), from);
         }
@@ -383,12 +409,30 @@ fn diff_playlists(old: &PlaylistFile, new: &PlaylistFile) -> (String, Option<Str
     let old_ids: HashSet<&str> = old.tracks.iter().map(|t| t.id.as_str()).collect();
     let new_ids: HashSet<&str> = new.tracks.iter().map(|t| t.id.as_str()).collect();
 
-    let added: Vec<&TrackEntry> = new.tracks.iter().filter(|t| !old_ids.contains(t.id.as_str())).collect();
-    let removed: Vec<&TrackEntry> = old.tracks.iter().filter(|t| !new_ids.contains(t.id.as_str())).collect();
+    let added: Vec<&TrackEntry> = new
+        .tracks
+        .iter()
+        .filter(|t| !old_ids.contains(t.id.as_str()))
+        .collect();
+    let removed: Vec<&TrackEntry> = old
+        .tracks
+        .iter()
+        .filter(|t| !new_ids.contains(t.id.as_str()))
+        .collect();
 
     // Order change among the tracks present on both sides (isolates reorder from add/remove).
-    let old_common: Vec<&str> = old.tracks.iter().map(|t| t.id.as_str()).filter(|id| new_ids.contains(id)).collect();
-    let new_common: Vec<&str> = new.tracks.iter().map(|t| t.id.as_str()).filter(|id| old_ids.contains(id)).collect();
+    let old_common: Vec<&str> = old
+        .tracks
+        .iter()
+        .map(|t| t.id.as_str())
+        .filter(|id| new_ids.contains(id))
+        .collect();
+    let new_common: Vec<&str> = new
+        .tracks
+        .iter()
+        .map(|t| t.id.as_str())
+        .filter(|id| old_ids.contains(id))
+        .collect();
     let reordered = old_common != new_common;
 
     // Metadata-only changes when membership and order are unchanged.
@@ -499,8 +543,14 @@ fn compose_message(details: &[ChangeDetail]) -> String {
 /// gains the other. No-op once both are present.
 fn ensure_cache_ignored(dir: &Path) -> Result<(), String> {
     const RULES: [(&str, &str); 2] = [
-        ("cache", "# Derived audio-feature cache — rebuildable, keep out of git"),
-        ("staged", "# Saved-but-unpushed edits — drafts, not a state to commit"),
+        (
+            "cache",
+            "# Derived audio-feature cache — rebuildable, keep out of git",
+        ),
+        (
+            "staged",
+            "# Saved-but-unpushed edits — drafts, not a state to commit",
+        ),
     ];
     let gi = dir.join(".gitignore");
     let existing = std::fs::read_to_string(&gi).unwrap_or_default();
@@ -610,8 +660,15 @@ fn absorb_poller_commits(dir: &Path, branch: &str) -> Result<bool, String> {
     }
 
     // Files the remote changed since our shared ancestor (three-dot: merge-base..remote).
-    let incoming = run_ok(dir, &["diff", "--name-only", &format!("HEAD...{remote_ref}")])?;
-    let files: Vec<&str> = incoming.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let incoming = run_ok(
+        dir,
+        &["diff", "--name-only", &format!("HEAD...{remote_ref}")],
+    )?;
+    let files: Vec<&str> = incoming
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     if files.is_empty() || !files.iter().all(|f| POLLER_FILES.contains(f)) {
         return Ok(false);
     }
@@ -642,9 +699,12 @@ pub fn push(dir: &Path) -> Result<PushOutcome, String> {
     // times — each pass re-absorbs and tries again rather than failing the user's push.
     let mut absorbed = false;
     for attempt in 0..3 {
-        let has_upstream = run(dir, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"])
-            .map(|o| o.status.success())
-            .unwrap_or(false);
+        let has_upstream = run(
+            dir,
+            &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        )
+        .map(|o| o.status.success())
+        .unwrap_or(false);
         // First push of a branch with no upstream sets one so later pushes are a bare `git push`.
         let args: &[&str] = if has_upstream {
             &["push"]
@@ -662,7 +722,10 @@ pub fn push(dir: &Path) -> Result<PushOutcome, String> {
             } else {
                 "Pushed to the remote.".into()
             };
-            return Ok(PushOutcome { pushed: true, message });
+            return Ok(PushOutcome {
+                pushed: true,
+                message,
+            });
         }
 
         let lower = stderr.to_lowercase();
@@ -745,9 +808,23 @@ mod tests {
 
     #[test]
     fn diff_reports_added_removed_and_reorder() {
-        let old = playlist("Road Trip", vec![track("a", "A", "X"), track("b", "B", "Y"), track("c", "C", "Z")]);
+        let old = playlist(
+            "Road Trip",
+            vec![
+                track("a", "A", "X"),
+                track("b", "B", "Y"),
+                track("c", "C", "Z"),
+            ],
+        );
         // remove b, add d, and move c before a → reorder among the common {a, c}.
-        let new = playlist("Road Trip", vec![track("c", "C", "Z"), track("a", "A", "X"), track("d", "D", "W")]);
+        let new = playlist(
+            "Road Trip",
+            vec![
+                track("c", "C", "Z"),
+                track("a", "A", "X"),
+                track("d", "D", "W"),
+            ],
+        );
         let (summary, body) = diff_playlists(&old, &new);
         assert_eq!(summary, "\"Road Trip\": +1 −1 reordered");
         let body = body.expect("body");
@@ -776,7 +853,9 @@ mod tests {
     #[test]
     fn added_list_caps_at_ten() {
         let old = playlist("Big", vec![]);
-        let many: Vec<TrackEntry> = (0..13).map(|i| track(&format!("id{i}"), &format!("T{i}"), "A")).collect();
+        let many: Vec<TrackEntry> = (0..13)
+            .map(|i| track(&format!("id{i}"), &format!("T{i}"), "A"))
+            .collect();
         let new = playlist("Big", many);
         let (summary, body) = diff_playlists(&old, &new);
         assert_eq!(summary, "\"Big\": +13");
@@ -798,8 +877,20 @@ mod tests {
     #[test]
     fn compose_multiple_changes_summarizes_subject() {
         let details = vec![
-            ChangeDetail { path: "playlists/a.json".into(), kind: ChangeKind::Modified, summary: "\"A\": +1".into(), body: None, is_playlist: true },
-            ChangeDetail { path: "playlists/b.json".into(), kind: ChangeKind::Modified, summary: "\"B\": −1".into(), body: None, is_playlist: true },
+            ChangeDetail {
+                path: "playlists/a.json".into(),
+                kind: ChangeKind::Modified,
+                summary: "\"A\": +1".into(),
+                body: None,
+                is_playlist: true,
+            },
+            ChangeDetail {
+                path: "playlists/b.json".into(),
+                kind: ChangeKind::Modified,
+                summary: "\"B\": −1".into(),
+                body: None,
+                is_playlist: true,
+            },
         ];
         let msg = compose_message(&details);
         assert!(msg.starts_with("Update 2 playlists\n\n"), "{msg}");
@@ -813,12 +904,25 @@ mod tests {
     use std::process::Command;
 
     fn git_available() -> bool {
-        Command::new("git").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
+        Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git").arg("-C").arg(dir).args(args).output().unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     fn unique_dir(tag: &str) -> PathBuf {
@@ -864,8 +968,16 @@ mod tests {
         write_playlist(&work, "long-drives.json", "Long Drives", &["a", "b"]);
 
         let s = status(&work).unwrap();
-        assert_eq!(s.changes.len(), 1, "one playlist moved, not two files: {:?}", s.changes);
-        assert_eq!(s.changes[0].summary, "Rename \"Road Trip\" → \"Long Drives\"");
+        assert_eq!(
+            s.changes.len(),
+            1,
+            "one playlist moved, not two files: {:?}",
+            s.changes
+        );
+        assert_eq!(
+            s.changes[0].summary,
+            "Rename \"Road Trip\" → \"Long Drives\""
+        );
         assert_eq!(s.changes[0].path, "playlists/long-drives.json");
 
         let _ = std::fs::remove_dir_all(&work);
@@ -966,19 +1078,30 @@ mod tests {
         write_playlist(&work, "road.json", "Road Trip", &["a", "b"]);
         git(&work, &["add", "-A"]);
         git(&work, &["commit", "-qm", "init"]);
-        git(&work, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        git(
+            &work,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
         git(&work, &["push", "-qu", "origin", "main"]);
 
         // Clean to start.
         let s = status(&work).unwrap();
-        assert!(s.clean && s.has_remote && s.has_upstream && s.ahead == 0, "fresh: {s:?}", s = (s.clean, s.has_remote, s.has_upstream, s.ahead));
+        assert!(
+            s.clean && s.has_remote && s.has_upstream && s.ahead == 0,
+            "fresh: {s:?}",
+            s = (s.clean, s.has_remote, s.has_upstream, s.ahead)
+        );
 
         // Edit: add track c, remove b.
         write_playlist(&work, "road.json", "Road Trip", &["a", "c"]);
         let s = status(&work).unwrap();
         assert!(!s.clean);
         assert_eq!(s.changes.len(), 1);
-        assert!(s.changes[0].summary.contains("Road Trip"), "{}", s.changes[0].summary);
+        assert!(
+            s.changes[0].summary.contains("Road Trip"),
+            "{}",
+            s.changes[0].summary
+        );
         assert!(s.changes[0].summary.contains("+1"));
 
         let msg = suggest_message(&work).unwrap();
@@ -1011,17 +1134,28 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         // A repo that already ignores the cache must still pick up the staged rule.
-        std::fs::write(dir.join(".gitignore"), "cache/
-").unwrap();
+        std::fs::write(
+            dir.join(".gitignore"),
+            "cache/
+",
+        )
+        .unwrap();
         ensure_cache_ignored(&dir).unwrap();
         let gi = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
-        assert_eq!(gi.matches("cache/").count(), 1, "cache rule duplicated: {gi}");
+        assert_eq!(
+            gi.matches("cache/").count(),
+            1,
+            "cache rule duplicated: {gi}"
+        );
         assert!(gi.contains("staged/"), "staged rule missing: {gi}");
 
         // And running again changes nothing.
         let before = gi;
         ensure_cache_ignored(&dir).unwrap();
-        assert_eq!(std::fs::read_to_string(dir.join(".gitignore")).unwrap(), before);
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
+            before
+        );
     }
 
     #[test]
@@ -1051,7 +1185,10 @@ mod tests {
         write_playlist(&work, "road.json", "Road Trip", &["a", "b"]);
         git(&work, &["add", "-A"]);
         git(&work, &["commit", "-qm", "init"]);
-        git(&work, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        git(
+            &work,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
         git(&work, &["push", "-qu", "origin", "main"]);
 
         let logger = unique_dir(&format!("{tag}-logger"));
@@ -1082,7 +1219,10 @@ mod tests {
         // The logger appends to its history log and pushes — now the remote is ahead of `work`.
         append_history(&logger, "{\"track_id\":\"a\",\"played_at\":\"t1\"}");
         git(&logger, &["add", "history/plays.jsonl"]);
-        git(&logger, &["commit", "-qm", "chore(history): log recently played"]);
+        git(
+            &logger,
+            &["commit", "-qm", "chore(history): log recently played"],
+        );
         git(&logger, &["push", "-q"]);
 
         // The user edits a playlist and commits, unaware of the logger's commit.
@@ -1102,7 +1242,10 @@ mod tests {
         // In sync, and the work tree now holds the logger's history line too.
         let s = status(&work).unwrap();
         assert_eq!(s.ahead, 0, "pushed → not ahead");
-        assert!(work.join("history/plays.jsonl").exists(), "history pulled in");
+        assert!(
+            work.join("history/plays.jsonl").exists(),
+            "history pulled in"
+        );
 
         let _ = std::fs::remove_dir_all(&work);
         let _ = std::fs::remove_dir_all(&logger);
@@ -1132,7 +1275,11 @@ mod tests {
             "expected a divergence error, got: {err}"
         );
         // The push attempt must not have moved our branch.
-        assert_eq!(status(&work).unwrap().ahead, 1, "still one local commit, unpushed");
+        assert_eq!(
+            status(&work).unwrap().ahead,
+            1,
+            "still one local commit, unpushed"
+        );
 
         let _ = std::fs::remove_dir_all(&work);
         let _ = std::fs::remove_dir_all(&other);

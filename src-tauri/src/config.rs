@@ -72,7 +72,9 @@ pub fn migrate_legacy_staging(legacy: &Path, current: &Path) -> usize {
         if from.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Some(name) = from.file_name() else { continue };
+        let Some(name) = from.file_name() else {
+            continue;
+        };
         let to = current.join(name);
         if to.exists() {
             let _ = std::fs::remove_file(&from);
@@ -105,7 +107,9 @@ pub fn validate_data_dir(configured: &str) -> Result<PathBuf, String> {
         ));
     }
     if !path.is_dir() {
-        return Err(format!("Data folder doesn't exist (or isn't a folder): {configured}"));
+        return Err(format!(
+            "Data folder doesn't exist (or isn't a folder): {configured}"
+        ));
     }
     Ok(path)
 }
@@ -116,9 +120,7 @@ pub fn validate_data_dir(configured: &str) -> Result<PathBuf, String> {
 pub fn resolve_data_dir(cfg: &AppConfig) -> Result<PathBuf, String> {
     let configured = cfg.data_dir.trim();
     if configured.is_empty() {
-        return Err(
-            "No data folder configured — choose one in Setup (Browse…) first.".to_string(),
-        );
+        return Err("No data folder configured — choose one in Setup (Browse…) first.".to_string());
     }
     validate_data_dir(configured)
 }
@@ -163,7 +165,10 @@ mod tests {
             std::fs::read_to_string(current.join("road.json")).unwrap(),
             "newer"
         );
-        assert!(!legacy.join("road.json").exists(), "the stale copy is dropped");
+        assert!(
+            !legacy.join("road.json").exists(),
+            "the stale copy is dropped"
+        );
     }
 
     #[test]
@@ -173,4 +178,3 @@ mod tests {
         assert_eq!(migrate_legacy_staging(&legacy, &current), 0);
     }
 }
-

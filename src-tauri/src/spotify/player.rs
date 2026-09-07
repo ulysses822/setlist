@@ -6,8 +6,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    capture_get_retry, ensure_streaming_token, err, get_json, null_default, send_capture,
-    AppState, ArtistObj, ImageObj, LinkedFrom, API,
+    capture_get_retry, ensure_streaming_token, err, get_json, null_default, send_capture, AppState,
+    ArtistObj, ImageObj, LinkedFrom, API,
 };
 
 /// Expose an access token to the frontend (the Web Playback SDK needs one). Deliberately the
@@ -227,7 +227,9 @@ pub async fn player_state(
         track_name: item.name,
         uri: item.uri,
         artists: item.artists.into_iter().map(|a| a.name).collect(),
-        cover: item.album.and_then(|a| a.images.first().map(|i| i.url.clone())),
+        cover: item
+            .album
+            .and_then(|a| a.images.first().map(|i| i.url.clone())),
         context_uri: p.context.map(|c| c.uri),
         linked_from_uri: item.linked_from.map(|l| l.uri),
     }))

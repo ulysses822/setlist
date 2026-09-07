@@ -59,9 +59,9 @@ pub(crate) fn playlist_url(id: &str) -> Result<String, String> {
 // extend the wait) and show a countdown.
 const MIN_REQUEST_INTERVAL: Duration = Duration::from_millis(150);
 const AUTO_RETRY_CAP_SECS: u64 = 8; // auto-wait+retry only for short cooldowns
-// When a 429 has no parseable Retry-After (the header may legally be an HTTP-date), assume
-// a cooldown *above* the auto-retry cap: retrying while genuinely limited only extends the
-// block, so fail safe toward waiting.
+                                    // When a 429 has no parseable Retry-After (the header may legally be an HTTP-date), assume
+                                    // a cooldown *above* the auto-retry cap: retrying while genuinely limited only extends the
+                                    // block, so fail safe toward waiting.
 const RETRY_AFTER_FALLBACK_SECS: u64 = 30;
 const MAX_ATTEMPTS: u32 = 3;
 
@@ -472,7 +472,13 @@ pub(crate) async fn capture_get_retry(
     for attempt in 0..MAX_ATTEMPTS {
         rate_limit_preflight(state).await?;
         let token = ensure_token(state, client_id).await?;
-        let resp = state.http.get(url).bearer_auth(&token).send().await.map_err(err)?;
+        let resp = state
+            .http
+            .get(url)
+            .bearer_auth(&token)
+            .send()
+            .await
+            .map_err(err)?;
         let status = resp.status();
         if status.as_u16() == 401 && !refreshed_auth {
             refreshed_auth = true;
@@ -564,30 +570,20 @@ pub async fn probe_write(state: &AppState, client_id: String) -> Result<Vec<Prob
     if let Some((pid, pname)) = owned {
         let items = format!("{}/items", playlist_url(&pid)?);
         let add_body = serde_json::json!({ "uris": [TEST_TRACK] });
-        let (st, body) = send_capture(
-            state,
-            &client_id,
-            state
-                .http
-                .post(&items)
-                .json(&add_body),
-        )
-        .await?;
+        let (st, body) =
+            send_capture(state, &client_id, state.http.post(&items).json(&add_body)).await?;
         steps.push(step(&format!("Add a track to \"{pname}\""), st, &body));
 
         // Only attempt removal if the add actually landed, to avoid leaving a stray track.
         if st.is_success() {
             let del_body = serde_json::json!({ "items": [ { "uri": TEST_TRACK } ] });
-            let (st, body) = send_capture(
-                state,
-                &client_id,
-                state
-                    .http
-                    .delete(&items)
-                    .json(&del_body),
-            )
-            .await?;
-            steps.push(step(&format!("Remove that track from \"{pname}\""), st, &body));
+            let (st, body) =
+                send_capture(state, &client_id, state.http.delete(&items).json(&del_body)).await?;
+            steps.push(step(
+                &format!("Remove that track from \"{pname}\""),
+                st,
+                &body,
+            ));
         }
     } else {
         steps.push(ProbeStep {
@@ -680,7 +676,10 @@ pub async fn unfollow_archived(
     client_id: String,
     data_dir: PathBuf,
 ) -> Result<UnfollowReport, String> {
-    let mut report = UnfollowReport { done: 0, failed: Vec::new() };
+    let mut report = UnfollowReport {
+        done: 0,
+        failed: Vec::new(),
+    };
     for file in load_archived(&data_dir) {
         let Ok(pf) = read_local(data_dir.clone(), file) else {
             continue;
@@ -702,9 +701,11 @@ pub async fn unfollow_archived(
         let result = send_capture(state, &client_id, state.http.delete(url)).await;
         match result {
             Ok((st, _)) if st.is_success() => report.done += 1,
-            Ok((st, body)) => report
-                .failed
-                .push(format!("\"{}\" (HTTP {st}: {})", pf.name, body.trim())),
+            Ok((st, body)) => {
+                report
+                    .failed
+                    .push(format!("\"{}\" (HTTP {st}: {})", pf.name, body.trim()))
+            }
             // A transport error (offline, rate limit) mid-loop must not discard the report —
             // the playlists already unfollowed stay counted, and the rest are listed as
             // failed rather than silently skipped. Rate-limit failures short-circuit in the
@@ -763,7 +764,10 @@ pub async fn delete_playlist(
         )
         .await?;
         if !st.is_success() {
-            return Err(format!("Delete (unfollow) failed (HTTP {st}): {}", b.trim()));
+            return Err(format!(
+                "Delete (unfollow) failed (HTTP {st}): {}",
+                b.trim()
+            ));
         }
     }
 
@@ -876,7 +880,9 @@ fn library_replacement(data_dir: &Path, track: &TrackEntry) -> Option<Replacemen
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
             continue;
         }
-        let Some(pf) = read_playlist_cached(&path) else { continue };
+        let Some(pf) = read_playlist_cached(&path) else {
+            continue;
+        };
         for cand in &pf.tracks {
             if cand.id == track.id || cand.id.starts_with("spotify:local:") {
                 continue;

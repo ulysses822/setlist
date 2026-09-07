@@ -6,16 +6,16 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::{
-    ensure_token, err, get_json, playlist_url, send_capture, AppState, Paging, PlaylistMeta,
-    PlaylistObj, PlaylistSummary, PlaylistTrackObj, API,
-};
+use super::store::{clear_staged, read_local};
 use super::store::{
     existing_file_for, existing_filenames, load_sync_meta, read_playlist_cached, rename_to_match,
     save_sync_meta, sync_meta_of, unique_filename, upsert_sync_meta, write_atomic, write_playlist,
     PlaylistFile, SyncMeta, TrackEntry,
 };
-use super::store::{clear_staged, read_local};
+use super::{
+    ensure_token, err, get_json, playlist_url, send_capture, AppState, Paging, PlaylistMeta,
+    PlaylistObj, PlaylistSummary, PlaylistTrackObj, API,
+};
 
 // Ceiling on pages followed per paginated listing — insurance against a malformed
 // self-referencing `next` link looping forever. Far above any real library: 200 pages is
@@ -51,8 +51,8 @@ pub(crate) async fn fetch_tracks(
 
         for entry in page.items {
             let Some(track) = entry.item else { continue }; // skip fully-absent/local tracks
-            // Prefer the original (pre-relink) uri so the stored id matches what the playlist
-            // really references; fall back to the top-level uri when there's no relink.
+                                                            // Prefer the original (pre-relink) uri so the stored id matches what the playlist
+                                                            // really references; fall back to the top-level uri when there's no relink.
             let id = track.linked_from.map(|l| l.uri).unwrap_or(track.uri);
             out.push(TrackEntry {
                 id,
@@ -110,8 +110,10 @@ pub async fn pull_playlists(
     // cached file is kept too so an unchanged playlist (matching snapshot_id) can reuse its
     // tracks instead of re-downloading them.
     let mut used_names: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut id_to_cached: std::collections::HashMap<String, (String, std::sync::Arc<PlaylistFile>)> =
-        std::collections::HashMap::new();
+    let mut id_to_cached: std::collections::HashMap<
+        String,
+        (String, std::sync::Arc<PlaylistFile>),
+    > = std::collections::HashMap::new();
     for entry in std::fs::read_dir(&playlists_dir).map_err(err)? {
         let path = entry.map_err(err)?.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
@@ -185,8 +187,8 @@ pub async fn pull_playlists(
 
         // Reuse the file already mapped to this Spotify id (handles renames); only mint a new
         // unique filename for playlists we haven't stored before.
-        let filename = existing_filename
-            .unwrap_or_else(|| unique_filename(&pl.name, &mut used_names));
+        let filename =
+            existing_filename.unwrap_or_else(|| unique_filename(&pl.name, &mut used_names));
         let model = PlaylistFile {
             spotify_id: pl.id.clone(),
             name: pl.name.clone(),
@@ -453,9 +455,12 @@ async fn apply_replace(
             } else {
                 state.http.post(&items)
             };
-            let (st, body) =
-                send_capture(state, client_id, rb.json(&serde_json::json!({ "uris": chunk })))
-                    .await?;
+            let (st, body) = send_capture(
+                state,
+                client_id,
+                rb.json(&serde_json::json!({ "uris": chunk })),
+            )
+            .await?;
             if !st.is_success() {
                 return Err(format!(
                     "Push failed at batch {} of {} (HTTP {st}): {} — Spotify currently has only the first {} track(s) of this push; your local edits are intact, push again to finish.",
@@ -537,7 +542,10 @@ fn plan_changes(current: &[TrackEntry], target: &[TrackEntry]) -> ChangePlan {
     // Delta only pays off when tracks are actually retained (that's whose added_at it
     // preserves) and it isn't more calls than a replace (e.g. most of the list was rewritten).
     let delta_calls = removed.len().div_ceil(100)
-        + inserts.iter().map(|(_, u)| u.len().div_ceil(100)).sum::<usize>();
+        + inserts
+            .iter()
+            .map(|(_, u)| u.len().div_ceil(100))
+            .sum::<usize>();
     let replace_calls = target.len().div_ceil(100).max(1);
     if tgt_common.is_empty() || delta_calls > replace_calls + 1 {
         return ChangePlan::Replace;
@@ -564,8 +572,10 @@ async fn apply_changes(
 
     // Remove first so the insert positions line up with the post-removal list.
     for chunk in removed.chunks(100) {
-        let removals: Vec<serde_json::Value> =
-            chunk.iter().map(|u| serde_json::json!({ "uri": u })).collect();
+        let removals: Vec<serde_json::Value> = chunk
+            .iter()
+            .map(|u| serde_json::json!({ "uri": u }))
+            .collect();
         let (st, b) = send_capture(
             state,
             client_id,
@@ -696,7 +706,10 @@ pub async fn push_playlist(
         )
         .await?;
         if !st.is_success() {
-            return Err(format!("Create on Spotify failed (HTTP {st}): {}", body.trim()));
+            return Err(format!(
+                "Create on Spotify failed (HTTP {st}): {}",
+                body.trim()
+            ));
         }
         let created: PlaylistMeta = serde_json::from_str(&body).map_err(err)?;
         let new_pid = created.id;
@@ -720,52 +733,58 @@ pub async fn push_playlist(
     // remote-added tracks to merge — skip the full track download entirely (same trick
     // `sync_status` uses). Only pull the whole playlist when the snapshot actually moved.
     let remote_snapshot = fetch_snapshot_id(state, &client_id, &pid).await?;
-    let (target, current, remote_name, remote_description) = if remote_snapshot == baseline.snapshot_id {
-        // No divergence: every strategy reduces to the user's edits (no remote additions),
-        // and the remote currently equals our baseline — so use baseline tracks as `current`
-        // for the delta below without a second download.
-        (tracks, baseline.tracks.clone(), baseline.name.clone(), baseline.description.clone())
-    } else {
-        let remote = fetch_one(state, &client_id, &pid).await?;
-        let status = build_sync_status(&baseline, &remote);
-        // Treat the playlist as diverged if the snapshot changed OR the track membership
-        // differs from our baseline (defensive: don't rely on snapshot_id alone).
-        let diverged = status.remote_changed
-            || !status.remote_added.is_empty()
-            || !status.remote_removed.is_empty();
+    let (target, current, remote_name, remote_description) =
+        if remote_snapshot == baseline.snapshot_id {
+            // No divergence: every strategy reduces to the user's edits (no remote additions),
+            // and the remote currently equals our baseline — so use baseline tracks as `current`
+            // for the delta below without a second download.
+            (
+                tracks,
+                baseline.tracks.clone(),
+                baseline.name.clone(),
+                baseline.description.clone(),
+            )
+        } else {
+            let remote = fetch_one(state, &client_id, &pid).await?;
+            let status = build_sync_status(&baseline, &remote);
+            // Treat the playlist as diverged if the snapshot changed OR the track membership
+            // differs from our baseline (defensive: don't rely on snapshot_id alone).
+            let diverged = status.remote_changed
+                || !status.remote_added.is_empty()
+                || !status.remote_removed.is_empty();
 
-        let target: Vec<TrackEntry> = match strategy {
-            PushStrategy::Safe => {
-                if diverged {
-                    return Ok(PushResult {
-                        status: "conflict".into(),
-                        file: file.clone(),
-                        playlist: None,
-                        conflict: Some(status),
-                        warning: None,
-                    });
-                }
-                tracks
-            }
-            PushStrategy::Merge => {
-                // Keep the user's edits, and append any tracks added on Spotify since the
-                // baseline that the user hasn't already included (don't re-add their removals).
-                let base_ids: std::collections::HashSet<String> =
-                    baseline.tracks.iter().map(|t| t.id.clone()).collect();
-                let local_ids: std::collections::HashSet<String> =
-                    tracks.iter().map(|t| t.id.clone()).collect();
-                let mut merged = tracks;
-                for rt in &remote.tracks {
-                    if !base_ids.contains(&rt.id) && !local_ids.contains(&rt.id) {
-                        merged.push(rt.clone());
+            let target: Vec<TrackEntry> = match strategy {
+                PushStrategy::Safe => {
+                    if diverged {
+                        return Ok(PushResult {
+                            status: "conflict".into(),
+                            file: file.clone(),
+                            playlist: None,
+                            conflict: Some(status),
+                            warning: None,
+                        });
                     }
+                    tracks
                 }
-                merged
-            }
-            PushStrategy::Overwrite => tracks,
+                PushStrategy::Merge => {
+                    // Keep the user's edits, and append any tracks added on Spotify since the
+                    // baseline that the user hasn't already included (don't re-add their removals).
+                    let base_ids: std::collections::HashSet<String> =
+                        baseline.tracks.iter().map(|t| t.id.clone()).collect();
+                    let local_ids: std::collections::HashSet<String> =
+                        tracks.iter().map(|t| t.id.clone()).collect();
+                    let mut merged = tracks;
+                    for rt in &remote.tracks {
+                        if !base_ids.contains(&rt.id) && !local_ids.contains(&rt.id) {
+                            merged.push(rt.clone());
+                        }
+                    }
+                    merged
+                }
+                PushStrategy::Overwrite => tracks,
+            };
+            (target, remote.tracks, remote.name, remote.description)
         };
-        (target, remote.tracks, remote.name, remote.description)
-    };
 
     // Diff against what's on Spotify now: remove/add only what changed (preserving added_at
     // on untouched tracks), falling back to a full replace for reorders/dups/rewrites.
@@ -782,13 +801,12 @@ pub async fn push_playlist(
     // keeps the existing text — there's no way to clear a description to empty via the Web API).
     // Detect that so the "cleared" edit doesn't look like it mysteriously reverted, and tell the
     // user rather than pretending it applied.
-    let warning = (description.trim().is_empty() && !updated.description.trim().is_empty()).then(
-        || {
+    let warning =
+        (description.trim().is_empty() && !updated.description.trim().is_empty()).then(|| {
             "Spotify doesn't allow clearing a description to blank via its API, so the previous \
              one was kept."
                 .to_string()
-        },
-    );
+        });
     let file = write_playlist(&data_dir, &file, &updated)?;
     clear_staged(staging_dir, file.clone())?;
     Ok(PushResult {
@@ -818,7 +836,10 @@ async fn update_details(
     )
     .await?;
     if !st.is_success() {
-        return Err(format!("Update name/description failed (HTTP {st}): {}", b.trim()));
+        return Err(format!(
+            "Update name/description failed (HTTP {st}): {}",
+            b.trim()
+        ));
     }
     Ok(())
 }
@@ -849,7 +870,10 @@ pub async fn refresh_playlist(
     }
     let updated = fetch_one(state, &client_id, &pf.spotify_id).await?;
     let file = write_playlist(&data_dir, &file, &updated)?;
-    Ok(PlaylistAt { file, playlist: updated })
+    Ok(PlaylistAt {
+        file,
+        playlist: updated,
+    })
 }
 
 #[cfg(test)]
@@ -900,8 +924,17 @@ mod tests {
         // The committed JSON is content-only: no volatile fields, none of their values.
         let raw = std::fs::read_to_string(dir.join("playlists").join("road.json")).unwrap();
         assert!(raw.contains("\"name\"") && raw.contains("pid1"));
-        for needle in ["snapshot_id", "last_synced", "cover_url", "snap1", "cover.jpg"] {
-            assert!(!raw.contains(needle), "committed JSON leaked {needle}: {raw}");
+        for needle in [
+            "snapshot_id",
+            "last_synced",
+            "cover_url",
+            "snap1",
+            "cover.jpg",
+        ] {
+            assert!(
+                !raw.contains(needle),
+                "committed JSON leaked {needle}: {raw}"
+            );
         }
 
         // The volatile fields live in the gitignored sidecar instead.
@@ -916,17 +949,25 @@ mod tests {
 
         // A snapshot bump rewrites only the sidecar; the committed JSON is untouched, so it
         // produces no git change.
-        let before = std::fs::metadata(dir.join("playlists").join("road.json")).unwrap().len();
+        let before = std::fs::metadata(dir.join("playlists").join("road.json"))
+            .unwrap()
+            .len();
         upsert_sync_meta(
             &dir,
             "pid1",
-            SyncMeta { snapshot_id: "snap2".into(), ..sync_meta_of(&pf) },
+            SyncMeta {
+                snapshot_id: "snap2".into(),
+                ..sync_meta_of(&pf)
+            },
         )
         .unwrap();
         let after = read_local(dir.clone(), "road.json".into()).unwrap();
         assert_eq!(after.snapshot_id, "snap2");
         let raw2 = std::fs::read_to_string(dir.join("playlists").join("road.json")).unwrap();
-        assert_eq!(raw, raw2, "committed JSON must not change on a snapshot bump");
+        assert_eq!(
+            raw, raw2,
+            "committed JSON must not change on a snapshot bump"
+        );
         assert_eq!(before, raw2.len() as u64);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -947,11 +988,17 @@ mod tests {
     #[test]
     fn interspersed_adds_get_correct_positions() {
         // current [a,b,c] -> target [a,X,b,Y,Z,c]: insert X at 1, run [Y,Z] at 3.
-        let plan = plan_changes(&tracks(&["a", "b", "c"]), &tracks(&["a", "X", "b", "Y", "Z", "c"]));
+        let plan = plan_changes(
+            &tracks(&["a", "b", "c"]),
+            &tracks(&["a", "X", "b", "Y", "Z", "c"]),
+        );
         match plan {
             ChangePlan::Delta { removed, inserts } => {
                 assert!(removed.is_empty());
-                assert_eq!(inserts, vec![(1, vec!["X".into()]), (3, vec!["Y".into(), "Z".into()])]);
+                assert_eq!(
+                    inserts,
+                    vec![(1, vec!["X".into()]), (3, vec!["Y".into(), "Z".into()])]
+                );
             }
             _ => panic!("expected delta"),
         }
@@ -989,7 +1036,10 @@ mod tests {
         let current = tracks(&["keep"]);
         let target_ids: Vec<String> = (0..150).map(|i| format!("n{i}")).collect();
         let target: Vec<TrackEntry> = target_ids.iter().map(|s| t(s)).collect();
-        assert!(matches!(plan_changes(&current, &target), ChangePlan::Replace));
+        assert!(matches!(
+            plan_changes(&current, &target),
+            ChangePlan::Replace
+        ));
     }
 
     #[test]

@@ -116,7 +116,7 @@ run there:
 ```bash
 npm run build   # tsc (strict) + vite build
 npm test        # the Rust suite — sync/push planner, staging, renames, git
-npm run lint    # clippy, warnings denied
+npm run lint    # cargo fmt --check, then clippy with warnings denied
 ```
 
 The Rust half is Windows-only (see [Platform support](#platform-support)), so `npm test` and

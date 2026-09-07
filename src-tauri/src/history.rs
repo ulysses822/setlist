@@ -65,7 +65,10 @@ pub fn read_plays(data_dir: &Path) -> Result<HistoryReport, String> {
         };
         total_plays += 1;
         // ISO-8601 timestamps sort correctly as plain strings.
-        if tracked_since.as_deref().is_none_or(|ts| p.played_at.as_str() < ts) {
+        if tracked_since
+            .as_deref()
+            .is_none_or(|ts| p.played_at.as_str() < ts)
+        {
             tracked_since = Some(p.played_at.clone());
         }
         let entry = by_id.entry(p.track_id).or_insert((0, String::new()));
@@ -77,7 +80,11 @@ pub fn read_plays(data_dir: &Path) -> Result<HistoryReport, String> {
 
     let stats = by_id
         .into_iter()
-        .map(|(id, (count, last_played))| PlayStat { id, count, last_played })
+        .map(|(id, (count, last_played))| PlayStat {
+            id,
+            count,
+            last_played,
+        })
         .collect();
 
     Ok(HistoryReport {
@@ -106,7 +113,9 @@ mod tests {
     fn missing_file_is_empty_not_an_error() {
         let dir = unique_dir("missing");
         let r = read_plays(&dir).unwrap();
-        assert!(!r.has_file && r.total_plays == 0 && r.stats.is_empty() && r.tracked_since.is_none());
+        assert!(
+            !r.has_file && r.total_plays == 0 && r.stats.is_empty() && r.tracked_since.is_none()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
