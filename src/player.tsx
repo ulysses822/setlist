@@ -10,7 +10,9 @@ import {
 } from "react";
 import { api, type DeviceInfo, type RemotePlayback } from "./api";
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
+// The `any`s below are all Spotify's Web Playback SDK. It's loaded from their CDN at runtime
+// rather than installed, ships no type definitions, and isn't in package.json — so `window.Spotify`
+// and every event payload it hands back are genuinely untyped. They're confined to this file.
 
 export interface PlaybackState {
   trackName: string;

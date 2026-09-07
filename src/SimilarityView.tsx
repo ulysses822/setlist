@@ -131,7 +131,8 @@ export default function SimilarityView({
   // First-ever open (or after the saved basis is cleared): fit once so there's a map to show.
   useEffect(() => {
     if (!basis && plottable.length >= 3) refit();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // `refit` is deliberately not a dependency: it's redeclared every render, so listing it
+    // would re-run this effect every render — and it calls setBasis, so that's a loop.
   }, [basis, plottable]);
 
   // Place each playlist by projecting it through the frozen basis. Because the basis (axes +
