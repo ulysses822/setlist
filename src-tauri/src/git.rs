@@ -382,10 +382,19 @@ fn head_playlist(dir: &Path, path: &str) -> Option<PlaylistFile> {
 /// working self at the new one. Nothing here cares that the path moved — the interesting
 /// change is the rename that caused it, which `diff_playlists` reads off the name.
 fn playlist_move(dir: &Path, from: &str, to: &str) -> (String, Option<String>) {
-    match (head_playlist(dir, from), working_playlist(dir, to)) {
-        (Some(head), Some(working)) => diff_playlists(&head, &working),
-        _ => (format!("Move {from} → {to}"), None),
+    let (Some(head), Some(working)) = (head_playlist(dir, from), working_playlist(dir, to)) else {
+        return (format!("Move {from} → {to}"), None);
+    };
+    let (summary, body) = diff_playlists(&head, &working);
+    // `diff_playlists` compares contents and knows nothing about paths, so a file that only
+    // moved comes back as "no track changes" — true of the playlist, and silent about the one
+    // thing that actually happened. That is the common case here: a playlist renamed on
+    // Spotify has its new name written into the old file on the next pull, and the filename
+    // only catches up later, so by the time the file moves both sides already agree.
+    if body.is_none() && summary.starts_with("Touch ") {
+        return (format!("Move \"{}\" to {to}", working.name), None);
     }
+    (summary, body)
 }
 
 /// Read a playlist file at HEAD (committed) and in the working tree, then describe the diff.
@@ -1013,6 +1022,42 @@ mod tests {
             ]
         );
         assert!(matches!(rows[3].1, ChangeKind::Modified));
+    }
+
+    #[test]
+    fn a_file_that_only_moved_says_so() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let work = unique_dir("moved");
+        git(&work, &["init", "-q", "-b", "main"]);
+        git(&work, &["config", "user.name", "Test"]);
+        git(&work, &["config", "user.email", "test@example.com"]);
+        // The real shape of this: the playlist was renamed on Spotify a while ago, so the new
+        // name is already inside the old file. Only the filename is behind.
+        write_playlist(&work, "little-dancer.json", "Dirt Tracks", &["a", "b"]);
+        git(&work, &["add", "-A"]);
+        git(&work, &["commit", "-qm", "init"]);
+
+        std::fs::remove_file(work.join("playlists").join("little-dancer.json")).unwrap();
+        write_playlist(&work, "dirt-tracks.json", "Dirt Tracks", &["a", "b"]);
+
+        let s = status(&work).unwrap();
+        assert_eq!(
+            s.changes.len(),
+            1,
+            "one move, not a remove and an add: {:?}",
+            s.changes
+        );
+        // Both sides parse to the same playlist, so the content diff has nothing to say. The
+        // move is the whole change, and the message has to carry it.
+        assert_eq!(
+            s.changes[0].summary,
+            "Move \"Dirt Tracks\" to playlists/dirt-tracks.json"
+        );
+
+        let _ = std::fs::remove_dir_all(&work);
     }
 
     #[test]
