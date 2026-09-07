@@ -1067,13 +1067,13 @@ mod tests {
             return;
         }
         let remote = unique_dir("remote");
-        git(&remote, &["init", "--bare", "-q"]);
+        git(&remote, &["init", "--bare", "-q", "-b", "main"]);
 
         let work = unique_dir("work");
         git(&work, &["init", "-q"]);
         git(&work, &["config", "user.name", "Test"]);
         git(&work, &["config", "user.email", "test@example.com"]);
-        // Some CIs default to 'master'; pin the branch so push -u origin HEAD is predictable.
+        // Never inherit init.defaultBranch — see remote_with_logger for what that costs.
         git(&work, &["checkout", "-q", "-B", "main"]);
         write_playlist(&work, "road.json", "Road Trip", &["a", "b"]);
         git(&work, &["add", "-A"]);
@@ -1173,9 +1173,18 @@ mod tests {
 
     /// Set up a bare remote with one playlist commit on `main`, plus a second working clone
     /// standing in for the GitHub Actions logger. Returns (remote, work, logger).
+    /// A bare "remote", a work clone, and a second clone standing in for the history logger.
+    ///
+    /// Every branch name here is stated outright. `git init` without `-b` follows
+    /// `init.defaultBranch`, which is `master` unless the machine says otherwise — so on a
+    /// machine configured for `main` the bare repo, the work repo and the logger clone all
+    /// agreed by luck, and on one that isn't (a CI runner, say) the logger committed to
+    /// `master` while the work repo pushed `main`. Different branches never collide, so the
+    /// push these tests exist to reject would sail through as a fast-forward and both tests
+    /// would fail claiming the push "succeeded".
     fn remote_with_logger(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
         let remote = unique_dir(&format!("{tag}-remote"));
-        git(&remote, &["init", "--bare", "-q"]);
+        git(&remote, &["init", "--bare", "-q", "-b", "main"]);
 
         let work = unique_dir(&format!("{tag}-work"));
         git(&work, &["init", "-q"]);
@@ -1192,7 +1201,10 @@ mod tests {
         git(&work, &["push", "-qu", "origin", "main"]);
 
         let logger = unique_dir(&format!("{tag}-logger"));
-        git(&logger, &["clone", "-q", remote.to_str().unwrap(), "."]);
+        git(
+            &logger,
+            &["clone", "-q", "-b", "main", remote.to_str().unwrap(), "."],
+        );
         git(&logger, &["config", "user.name", "Logger"]);
         git(&logger, &["config", "user.email", "logger@example.com"]);
 
