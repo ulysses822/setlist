@@ -406,16 +406,32 @@ pub struct LocalTrackHit {
     pub artists: Vec<String>,
 }
 
-/// Reject anything that isn't a plain file name (guards against path traversal).
+/// Reject anything that isn't a plain `<stem>.json` file name (guards against path traversal).
+///
 /// Must parse as exactly one normal path component; a `:` is additionally banned because
 /// on Windows a drive-relative name ("C:foo.json") makes `PathBuf::join` discard the base
 /// directory entirely, and "name.json:stream" would address an NTFS alternate data stream.
+///
+/// The `.json` suffix is required — lowercase, matching `list_local`'s extension filter and
+/// `git::is_playlist_path` — so all three agree on what counts as a playlist file. Without it
+/// a caller could address `.gitignore`, `desktop.ini` or a `.git/` entry inside the data repo
+/// through a command that only ever means to touch a playlist. Every name this app mints comes
+/// from `unique_file_name`, which always ends in `.json`, so nothing legitimate is turned away.
 fn safe_name(file: &str) -> Result<String, String> {
     use std::path::Component;
     let mut components = std::path::Path::new(file).components();
-    match (components.next(), components.next()) {
-        (Some(Component::Normal(_)), None) if !file.contains(':') => Ok(file.to_string()),
-        _ => Err(format!("Invalid playlist file name: {file}")),
+    let one_component = matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    );
+    // A bare ".json" has no stem — it is a hidden file, not a playlist.
+    let named_json = file
+        .strip_suffix(".json")
+        .is_some_and(|stem| !stem.is_empty());
+    if one_component && named_json && !file.contains(':') {
+        Ok(file.to_string())
+    } else {
+        Err(format!("Invalid playlist file name: {file}"))
     }
 }
 
@@ -1114,5 +1130,71 @@ mod tests {
             untouched.contains("pid1"),
             "the playlist already called Rock must not be hit"
         );
+    }
+
+    #[test]
+    fn a_playlist_name_cannot_escape_the_playlists_folder() {
+        // safe_name is the only thing standing between a file name arriving over IPC and an
+        // arbitrary write. Every command that opens a playlist goes through it, so each case
+        // here is a real path someone could otherwise reach.
+        for bad in [
+            "../secrets.json",      // parent traversal
+            "..\\..\\secrets.json", // ...spelled the Windows way
+            "sub/dir.json",         // nested, forward slash
+            "sub\\dir.json",        // nested, backslash
+            "/abs.json",            // rooted
+            "C:playlists.json",     // drive-relative: PathBuf::join drops the base
+            "jog.json:stream",      // NTFS alternate data stream
+            "..",                   // the parent directory itself
+            "",                     // nothing at all
+        ] {
+            assert!(safe_name(bad).is_err(), "should have been rejected: {bad}");
+        }
+
+        // Non-playlist files inside the data repo are reachable by name alone, so the .json
+        // requirement is what keeps a playlist command from addressing them.
+        for bad in [
+            ".gitignore",
+            "desktop.ini",
+            ".env",
+            "jog.JSON",
+            "jog.json.bak",
+            ".json",
+        ] {
+            assert!(safe_name(bad).is_err(), "should have been rejected: {bad}");
+        }
+
+        // And the names the app actually mints still pass, unchanged.
+        for good in ["jog.json", "road trip.json", "Björk.json", "a-b_c.2.json"] {
+            assert_eq!(safe_name(good).unwrap(), good);
+        }
+    }
+
+    #[test]
+    fn unique_filename_only_ever_mints_names_safe_name_accepts() {
+        // The two ends of the same rule. If unique_filename could produce something safe_name
+        // rejects, pulling a playlist would write a file no later command could reopen — and
+        // Spotify playlist names are user-supplied, so the hostile cases are reachable.
+        let mut taken = std::collections::HashSet::new();
+        for playlist in [
+            "Jog",
+            "Road Trip",
+            "../../etc/passwd",
+            "C:\\Windows\\System32",
+            "  ",
+            "",
+            "a:b",
+            ".",
+            "..",
+            "?<>|*",
+            ".gitignore",
+            ".env",
+        ] {
+            let minted = unique_filename(playlist, &mut taken);
+            assert!(
+                safe_name(&minted).is_ok(),
+                "unique_filename({playlist:?}) minted {minted:?}, which safe_name rejects"
+            );
+        }
     }
 }
