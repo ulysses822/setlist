@@ -115,7 +115,13 @@ fn spotify_id_from_href(href: &str) -> Option<String> {
 }
 
 async fn fetch_features(http: &reqwest::Client, reccobeats_id: &str) -> Option<Features> {
-    let url = format!("{RECCO}/track/{reccobeats_id}/audio-features");
+    // The id came out of ReccoBeats' own resolve response, which doesn't make it a safe path
+    // segment: `url` resolves dot segments before sending, so an unescaped id could aim this
+    // request at some other endpoint on their host.
+    let url = format!(
+        "{RECCO}/track/{}/audio-features",
+        urlencoding::encode(reccobeats_id)
+    );
     let resp = http.get(&url).header("Accept", "application/json").send().await.ok()?;
     if !resp.status().is_success() {
         return None;
@@ -189,9 +195,12 @@ pub async fn features_for(
         let mut resolved: HashMap<String, String> = HashMap::new(); // cache key -> reccobeats id
         let mut any_resolve_ok = false; // did ReccoBeats actually respond? (vs. an outage)
         for chunk in needs_tokens.chunks(40) {
+            // Tokens are ISRCs and Spotify ids read out of playlist files, so they're only
+            // as well-formed as whatever wrote them. Encode: a bare `&` or `=` in one would
+            // otherwise smuggle extra parameters into the request.
             let query = chunk
                 .iter()
-                .map(|tok| format!("ids={tok}"))
+                .map(|tok| format!("ids={}", urlencoding::encode(tok)))
                 .collect::<Vec<_>>()
                 .join("&");
             let url = format!("{RECCO}/track?{query}");

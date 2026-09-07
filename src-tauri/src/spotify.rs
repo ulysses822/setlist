@@ -26,6 +26,29 @@ pub use sync::*;
 
 pub(crate) const API: &str = "https://api.spotify.com/v1";
 
+/// Real Spotify ids are 22 characters. This cap leaves generous room for a format change and
+/// only exists so a garbage id is rejected — and echoed back — at a sane size.
+const MAX_ID_LEN: usize = 64;
+
+/// `{API}/playlists/{id}`, but only once `id` is verifiably a Spotify id.
+///
+/// Playlist ids reach us from the JSON in the data folder — a git repo, which can be cloned
+/// from anywhere — and are then interpolated into a request path sent with a full-scope
+/// token. That makes them untrusted input in the one place a URL is most forgeable: the `url`
+/// crate resolves dot segments before sending, so an id of `../me/player/pause` turns a PUT
+/// on a playlist into a PUT on the player, and a `?` or `#` quietly rewrites whatever query
+/// the caller appended. Spotify ids are base-62, so anything else is not an id at all —
+/// reject it rather than percent-encode it, since an escaped slash only buys a puzzling 404.
+pub(crate) fn playlist_url(id: &str) -> Result<String, String> {
+    if id.is_empty() || id.len() > MAX_ID_LEN || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(format!(
+            "{:?} is not a Spotify playlist id — check its spotify_id in your data folder.",
+            id.chars().take(MAX_ID_LEN).collect::<String>()
+        ));
+    }
+    Ok(format!("{API}/playlists/{id}"))
+}
+
 // ---------------------------------------------------------------------------
 // Shared state
 // ---------------------------------------------------------------------------
@@ -539,13 +562,14 @@ pub async fn probe_write(state: &AppState, client_id: String) -> Result<Vec<Prob
     });
 
     if let Some((pid, pname)) = owned {
+        let items = format!("{}/items", playlist_url(&pid)?);
         let add_body = serde_json::json!({ "uris": [TEST_TRACK] });
         let (st, body) = send_capture(
             state,
             &client_id,
             state
                 .http
-                .post(format!("{API}/playlists/{pid}/items"))
+                .post(&items)
                 .json(&add_body),
         )
         .await?;
@@ -559,7 +583,7 @@ pub async fn probe_write(state: &AppState, client_id: String) -> Result<Vec<Prob
                 &client_id,
                 state
                     .http
-                    .delete(format!("{API}/playlists/{pid}/items"))
+                    .delete(&items)
                     .json(&del_body),
             )
             .await?;
@@ -602,7 +626,7 @@ pub async fn probe_write(state: &AppState, client_id: String) -> Result<Vec<Prob
                 &client_id,
                 state
                     .http
-                    .delete(format!("{API}/playlists/{pid}/followers")),
+                    .delete(format!("{}/followers", playlist_url(&pid)?)),
             )
             .await?;
             steps.push(step("Clean up the new playlist", st, &body));
@@ -666,14 +690,16 @@ pub async fn unfollow_archived(
         if pf.spotify_id.is_empty() {
             continue;
         }
-        let result = send_capture(
-            state,
-            &client_id,
-            state
-                .http
-                .delete(format!("{API}/playlists/{}/followers", pf.spotify_id)),
-        )
-        .await;
+        // A malformed id is one playlist's problem, not the batch's: report it alongside the
+        // HTTP failures below and keep unfollowing the rest.
+        let url = match playlist_url(&pf.spotify_id) {
+            Ok(u) => format!("{u}/followers"),
+            Err(e) => {
+                report.failed.push(format!("\"{}\" ({e})", pf.name));
+                continue;
+            }
+        };
+        let result = send_capture(state, &client_id, state.http.delete(url)).await;
         match result {
             Ok((st, _)) if st.is_success() => report.done += 1,
             Ok((st, body)) => report
@@ -705,7 +731,7 @@ pub async fn follow_playlist(
         &client_id,
         state
             .http
-            .put(format!("{API}/playlists/{}/followers", pf.spotify_id))
+            .put(format!("{}/followers", playlist_url(&pf.spotify_id)?))
             .json(&serde_json::json!({ "public": false })),
     )
     .await?;
@@ -733,7 +759,7 @@ pub async fn delete_playlist(
             &client_id,
             state
                 .http
-                .delete(format!("{API}/playlists/{}/followers", pf.spotify_id)),
+                .delete(format!("{}/followers", playlist_url(&pf.spotify_id)?)),
         )
         .await?;
         if !st.is_success() {
@@ -975,6 +1001,50 @@ pub async fn suggest_replacement(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The premise `playlist_url` exists for: a raw id in the path is not inert. If this ever
+    /// fails, the request client stopped normalizing and the doc comment needs revisiting —
+    /// the validator itself should stay either way.
+    #[test]
+    fn an_unchecked_id_can_move_the_request_off_the_playlists_endpoint() {
+        let forged =
+            reqwest::Url::parse(&format!("{API}/playlists/../me/player/pause/items")).unwrap();
+        assert_eq!(forged.path(), "/v1/me/player/pause/items");
+
+        // And a `?` in the id eats the query the caller appended after it.
+        let swallowed =
+            reqwest::Url::parse(&format!("{API}/playlists/x?a=1?fields=snapshot_id")).unwrap();
+        assert_eq!(swallowed.query(), Some("a=1?fields=snapshot_id"));
+    }
+
+    #[test]
+    fn playlist_url_only_accepts_a_base_62_id() {
+        // The shape Spotify actually issues: 22 base-62 characters.
+        assert_eq!(
+            playlist_url("37i9dQZF1DXcBWIGoYBM5M").unwrap(),
+            "https://api.spotify.com/v1/playlists/37i9dQZF1DXcBWIGoYBM5M"
+        );
+
+        // Each of these would rewrite the request rather than name a playlist. `..` is the
+        // dangerous one: `url` resolves it, so the path below would leave /playlists/
+        // entirely and hit the player with whatever verb the caller chose.
+        for bad in [
+            "",
+            "../me/player/pause",
+            "abc/followers",
+            "abc?fields=x",
+            "abc#frag",
+            "abc%2f",
+            "spotify:playlist:abc",
+            "abc def",
+        ] {
+            assert!(playlist_url(bad).is_err(), "should have rejected {bad:?}");
+        }
+
+        // Well-formed but absurd is still rejected, so the message can safely quote it.
+        assert!(playlist_url(&"a".repeat(MAX_ID_LEN + 1)).is_err());
+        assert!(playlist_url(&"a".repeat(MAX_ID_LEN)).is_ok());
+    }
 
     #[test]
     fn secs_until_ceils_and_never_reports_zero_while_blocked() {

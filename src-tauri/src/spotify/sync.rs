@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    ensure_token, err, get_json, send_capture, AppState, Paging, PlaylistMeta, PlaylistObj,
-    PlaylistSummary, PlaylistTrackObj, API,
+    ensure_token, err, get_json, playlist_url, send_capture, AppState, Paging, PlaylistMeta,
+    PlaylistObj, PlaylistSummary, PlaylistTrackObj, API,
 };
 use super::store::{
     existing_file_for, existing_filenames, load_sync_meta, read_playlist_cached, rename_to_match,
@@ -39,7 +39,10 @@ pub(crate) async fn fetch_tracks(
 ) -> Result<Vec<TrackEntry>, String> {
     // `market=from_token` makes Spotify report `is_playable` (so we can flag greyed-out tracks)
     // relative to the user's country. It also enables track relinking — see `linked_from`.
-    let mut url = format!("{API}/playlists/{playlist_id}/items?limit=100&market=from_token");
+    let mut url = format!(
+        "{}/items?limit=100&market=from_token",
+        playlist_url(playlist_id)?
+    );
     let mut out = Vec::new();
     let mut pages = 0;
     loop {
@@ -304,7 +307,7 @@ async fn fetch_snapshot_id(
     let resp: SnapResp = get_json(
         state,
         client_id,
-        &format!("{API}/playlists/{playlist_id}?fields=snapshot_id"),
+        &format!("{}?fields=snapshot_id", playlist_url(playlist_id)?),
     )
     .await?;
     Ok(resp.snapshot_id)
@@ -315,8 +318,7 @@ pub(crate) async fn fetch_one(
     client_id: &str,
     playlist_id: &str,
 ) -> Result<PlaylistFile, String> {
-    let meta: PlaylistMeta =
-        get_json(state, client_id, &format!("{API}/playlists/{playlist_id}")).await?;
+    let meta: PlaylistMeta = get_json(state, client_id, &playlist_url(playlist_id)?).await?;
     let tracks = fetch_tracks(state, client_id, playlist_id).await?;
     Ok(PlaylistFile {
         spotify_id: meta.id,
@@ -428,6 +430,7 @@ async fn apply_replace(
     pid: &str,
     tracks: &[TrackEntry],
 ) -> Result<(), String> {
+    let items = format!("{}/items", playlist_url(pid)?);
     let uris: Vec<String> = tracks.iter().map(|t| t.id.clone()).collect();
     let chunks: Vec<&[String]> = uris.chunks(100).collect();
     if chunks.is_empty() {
@@ -436,7 +439,7 @@ async fn apply_replace(
             client_id,
             state
                 .http
-                .put(format!("{API}/playlists/{pid}/items"))
+                .put(&items)
                 .json(&serde_json::json!({ "uris": [] })),
         )
         .await?;
@@ -446,9 +449,9 @@ async fn apply_replace(
     } else {
         for (i, chunk) in chunks.iter().enumerate() {
             let rb = if i == 0 {
-                state.http.put(format!("{API}/playlists/{pid}/items"))
+                state.http.put(&items)
             } else {
-                state.http.post(format!("{API}/playlists/{pid}/items"))
+                state.http.post(&items)
             };
             let (st, body) =
                 send_capture(state, client_id, rb.json(&serde_json::json!({ "uris": chunk })))
@@ -557,18 +560,19 @@ async fn apply_changes(
         ChangePlan::Replace => return apply_replace(state, client_id, pid, target).await,
         ChangePlan::Delta { removed, inserts } => (removed, inserts),
     };
+    let items = format!("{}/items", playlist_url(pid)?);
 
     // Remove first so the insert positions line up with the post-removal list.
     for chunk in removed.chunks(100) {
-        let items: Vec<serde_json::Value> =
+        let removals: Vec<serde_json::Value> =
             chunk.iter().map(|u| serde_json::json!({ "uri": u })).collect();
         let (st, b) = send_capture(
             state,
             client_id,
             state
                 .http
-                .delete(format!("{API}/playlists/{pid}/items"))
-                .json(&serde_json::json!({ "items": items })),
+                .delete(&items)
+                .json(&serde_json::json!({ "items": removals })),
         )
         .await?;
         if !st.is_success() {
@@ -585,7 +589,7 @@ async fn apply_changes(
                 client_id,
                 state
                     .http
-                    .post(format!("{API}/playlists/{pid}/items"))
+                    .post(&items)
                     .json(&serde_json::json!({ "uris": chunk, "position": pos + c * 100 })),
             )
             .await?;
@@ -809,7 +813,7 @@ async fn update_details(
         client_id,
         state
             .http
-            .put(format!("{API}/playlists/{pid}"))
+            .put(playlist_url(pid)?)
             .json(&serde_json::json!({ "name": name, "description": description })),
     )
     .await?;
