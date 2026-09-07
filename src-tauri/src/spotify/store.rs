@@ -184,7 +184,7 @@ pub(crate) fn read_playlist_cached(path: &std::path::Path) -> Option<std::sync::
     let meta = std::fs::metadata(path).ok()?;
     let mtime = meta.modified().ok()?;
     let len = meta.len();
-    if let Some((m, l, pf)) = cache.lock().unwrap().get(path) {
+    if let Some((m, l, pf)) = super::lock_recover(cache).get(path) {
         if *m == mtime && *l == len {
             return Some(pf.clone());
         }
@@ -192,7 +192,7 @@ pub(crate) fn read_playlist_cached(path: &std::path::Path) -> Option<std::sync::
     let raw = std::fs::read_to_string(path).ok()?;
     let pf = Arc::new(serde_json::from_str::<PlaylistFile>(&raw).ok()?);
     {
-        let mut map = cache.lock().unwrap();
+        let mut map = super::lock_recover(cache);
         // Entries self-invalidate on (mtime, size) change, but deleted/renamed playlists would
         // otherwise linger forever (each pinning a full track list via its Arc). Bound the map:
         // once it grows past a generous cap, drop entries whose file no longer exists, and if

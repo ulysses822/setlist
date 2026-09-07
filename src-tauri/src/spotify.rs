@@ -65,6 +65,19 @@ const AUTO_RETRY_CAP_SECS: u64 = 8; // auto-wait+retry only for short cooldowns
 const RETRY_AFTER_FALLBACK_SECS: u64 = 30;
 const MAX_ATTEMPTS: u32 = 3;
 
+/// Take a plain-mutex guard, recovering rather than panicking if the lock is poisoned.
+///
+/// Every `std::sync::Mutex` in this crate guards a value that cannot be observed half-written:
+/// an `Instant`, an `Option<Instant>`, a parse cache keyed on (mtime, size). None of those
+/// critical sections spans an await or a fallible call, so poisoning them takes a panic in
+/// unrelated code on another thread — and `unwrap()` would then inherit that panic at every
+/// later call, turning one thread's failure into a permanently dead rate limiter or a sidebar
+/// that cannot list playlists again for the rest of the session. There is no invariant left to
+/// protect, so take the value and carry on.
+pub(crate) fn lock_recover<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 pub struct AppState {
     pub(crate) http: reqwest::Client,
     // token stays private: only auth's ensure_token/store_access (and invalidate_token) touch it.
@@ -73,7 +86,8 @@ pub struct AppState {
     // full-scope main token never crosses IPC (see auth::ensure_streaming_token).
     pub(crate) streaming_token: Mutex<Option<CachedToken>>,
     pub(crate) granted_scope: Mutex<Option<String>>,
-    // Plain std mutexes: critical sections are tiny and never held across an await.
+    // Plain std mutexes: critical sections are tiny and never held across an await. Read
+    // through `lock_recover`, never `unwrap`.
     rate_limited_until: std::sync::Mutex<Option<Instant>>,
     last_request: std::sync::Mutex<Instant>,
     // Serializes library-mutating pulls. Two pulls running at once (e.g. a bulk pull overlapping
@@ -130,7 +144,7 @@ impl AppState {
 
     /// Remaining rate-limit cooldown in whole seconds (rounded up), or 0 if not limited.
     pub fn cooldown_secs(&self) -> u64 {
-        let guard = self.rate_limited_until.lock().unwrap();
+        let guard = lock_recover(&self.rate_limited_until);
         match *guard {
             Some(until) => secs_until(until, Instant::now()),
             None => 0,
@@ -138,7 +152,7 @@ impl AppState {
     }
 
     fn set_cooldown(&self, secs: u64) {
-        *self.rate_limited_until.lock().unwrap() = Some(Instant::now() + Duration::from_secs(secs));
+        *lock_recover(&self.rate_limited_until) = Some(Instant::now() + Duration::from_secs(secs));
         self.emit_cooldown(secs);
     }
 
@@ -152,7 +166,7 @@ impl AppState {
     /// Reserve the next request slot (enforces MIN_REQUEST_INTERVAL between calls) and return
     /// how long the caller should sleep before sending. The lock is released before sleeping.
     fn reserve_slot(&self) -> Duration {
-        let mut last = self.last_request.lock().unwrap();
+        let mut last = lock_recover(&self.last_request);
         let now = Instant::now();
         let earliest = *last + MIN_REQUEST_INTERVAL;
         let wait = earliest.saturating_duration_since(now);
@@ -1064,5 +1078,31 @@ mod tests {
         // At/after the deadline, 0.
         assert_eq!(secs_until(now, now), 0);
         assert_eq!(secs_until(now - Duration::from_secs(1), now), 0);
+    }
+
+    #[test]
+    fn a_poisoned_lock_does_not_spread() {
+        // A panic while holding one of these locks used to be permanent: every later `unwrap()`
+        // inherited it, so a single unlucky thread could kill the rate limiter or the playlist
+        // cache for the rest of the session. The guarded values are plain scalars and a
+        // (mtime, size)-keyed cache — nothing a panic can leave half-written — so the second
+        // reader should see the value, not the panic.
+        let m = std::sync::Mutex::new(41);
+        let poisoner = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let mut g = m.lock().unwrap();
+                    *g += 1;
+                    panic!("thread died mid-critical-section");
+                })
+                .join()
+        });
+        assert!(poisoner.is_err(), "the helper thread was supposed to panic");
+        assert!(m.is_poisoned(), "and to leave the lock poisoned");
+
+        // The write it managed before dying is visible, and the lock still works.
+        assert_eq!(*lock_recover(&m), 42);
+        *lock_recover(&m) = 7;
+        assert_eq!(*lock_recover(&m), 7);
     }
 }
