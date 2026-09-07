@@ -234,3 +234,4 @@ audio-feature data it fetches at runtime belongs to Spotify and
 | `src-tauri/src/` | Rust core: Spotify client, OAuth, file I/O, sync engine |
 | `templates/poll-plays.{mjs,yml}` | History logger scaffolded into your data repo (script + 30-min cron) |
 | `scripts/get-refresh-token.mjs` | One-time scoped-token mint (CLI, dependency-free) |
+| `app-icon.png` | Icon master — `npm run tauri icon app-icon.png` regenerates `src-tauri/icons/` |
