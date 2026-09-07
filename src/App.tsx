@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type PlaylistSummary, type ProbeStep, type Profile } from "./api";
 import Library from "./Library";
 import { PlaybackBar } from "./player";
@@ -86,9 +86,16 @@ function App() {
   // Goals and view state come from the data folder, so the library can't render until they
   // have arrived — reading them early would show defaults and then never correct itself.
   const [prefsReady, setPrefsReady] = useState(false);
-  // Client secret for minting the (non-rotating) history token. In-memory only — used for the
-  // confidential auth flow and never written to disk; the user also stores it as a GitHub secret.
-  const [clientSecret, setClientSecret] = useState("");
+  // Client secret for minting the (non-rotating) history token. Never written to disk.
+  //
+  // The whole point of this app's token handling is that the webview doesn't hold credentials
+  // — it gets a streaming-scoped token and nothing else. The secret is the one exception it
+  // can't avoid, because a keyboard is the only place it can come from and the keyboard is in
+  // here. So it transits rather than resides: kept in a ref (no copy in the fiber tree, no
+  // re-render carrying it), handed to Rust, and zeroed the moment that call returns. State
+  // holds only whether there is one, which is all the button needs to know.
+  const secretRef = useRef<HTMLInputElement>(null);
+  const [hasSecret, setHasSecret] = useState(false);
   const [pullingId, setPullingId] = useState<string | null>(null); // single-playlist pull in flight
   const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
   const { blocked } = useRateLimit();
@@ -307,11 +314,13 @@ function App() {
   }
 
   async function mintHistoryToken() {
+    const secret = secretRef.current?.value.trim() ?? "";
+    if (secret === "") return; // the button is disabled without one; belt and braces
     setBusy("mint");
     setStatus(null);
     try {
       await api.setConfig(clientId, dataDir); // persist before the browser handoff
-      const token = await api.mintHistoryToken(clientSecret.trim());
+      const token = await api.mintHistoryToken(secret);
       setHistoryToken(token);
       setStatus({
         kind: "ok",
@@ -320,6 +329,11 @@ function App() {
     } catch (e) {
       setStatus({ kind: "err", msg: String(e) });
     } finally {
+      // Cleared whether or not it worked. A wrong secret is the likeliest failure and needs
+      // re-pasting anyway; leaving the right one sitting in the DOM for the rest of the
+      // session buys nothing.
+      if (secretRef.current) secretRef.current.value = "";
+      setHasSecret(false);
       setBusy(null);
     }
   }
@@ -612,14 +626,15 @@ function App() {
         </div>
 
         <div className="field">
-          <span>Client secret — used to mint the token, not saved to disk</span>
+          <span>Client secret — never saved to disk, and cleared from here once used</span>
           <input
             className="mono"
             name="client-secret"
             type="password"
             aria-label="Spotify client secret"
-            value={clientSecret}
-            onChange={(e) => setClientSecret(e.target.value)}
+            ref={secretRef}
+            defaultValue=""
+            onChange={(e) => setHasSecret(e.target.value.trim() !== "")}
             placeholder="paste your client secret to enable Generate token"
             spellCheck={false}
             autoComplete="off"
@@ -636,8 +651,8 @@ function App() {
           <button
             className="btn ghost small"
             onClick={mintHistoryToken}
-            disabled={busy !== null || clientId.trim() === "" || clientSecret.trim() === ""}
-            title={clientSecret.trim() === "" ? "Enter your client secret above first" : undefined}
+            disabled={busy !== null || clientId.trim() === "" || !hasSecret}
+            title={hasSecret ? undefined : "Enter your client secret above first"}
           >
             {busy === "mint" ? "Waiting for Spotify…" : historyToken ? "Regenerate" : "Generate token"}
           </button>
@@ -660,6 +675,15 @@ function App() {
                 onClick={() => copyText("Refresh token", historyToken)}
               >
                 Copy
+              </button>
+              {/* This is a live grant, not a receipt. Once it's in GitHub there's no reason
+                  for it to stay on screen and in memory until the app closes. */}
+              <button
+                className="btn ghost"
+                onClick={() => setHistoryToken("")}
+                title="Clear it from the screen once it's saved on GitHub"
+              >
+                Done
               </button>
             </div>
           </div>

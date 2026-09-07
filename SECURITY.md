@@ -24,6 +24,14 @@ can control playback but can't read or modify a playlist (`src-tauri/src/spotify
 That holds even when the streaming grant is missing: there is no fallback to the main token,
 so a failed grant means the player reports it and stays dead until you reconnect.
 
+The client secret is the one credential that has to pass through the webview, because a
+keyboard is the only place it can come from. It transits rather than resides: it is held in a
+ref rather than React state, sent straight to the Rust process, and cleared from the input the
+moment that call returns — success or failure. It is never written to disk, and the token it
+mints is shown once and can be dismissed off the screen. If you would rather it never reached
+a webview at all, `scripts/get-refresh-token.mjs` does the same authorization from a terminal
+with the input hidden.
+
 The production CSP has no `unsafe-inline`; the dev CSP relaxes `style-src` for Vite's HMR
 (`src-tauri/tauri.conf.json`). The OAuth loopback listener binds `127.0.0.1:8888` only while
 a login is in flight, matches the exact callback path, and rejects anything else that hits
