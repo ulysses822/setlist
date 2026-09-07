@@ -31,8 +31,10 @@ export default function StatusView({
   data,
   busy,
   driftMap,
-  driftBusy,
+  driftScan,
+  blocked,
   onCheckDrift,
+  onCancelDrift,
   onClose,
   onOpenPlaylist,
 }: {
@@ -41,8 +43,13 @@ export default function StatusView({
   busy: boolean;
   /** Per-file drift result, filled progressively by the drift check. */
   driftMap: Record<string, DriftState>;
-  driftBusy: boolean;
+  /** Progress of a running drift check, or null when none is running. One request per
+   *  playlist, so on a large library this is a long job the user needs to see and stop. */
+  driftScan: { done: number; total: number } | null;
+  /** Spotify's rate limit is in force — a drift check would only fail and extend it. */
+  blocked: boolean;
   onCheckDrift: () => void;
+  onCancelDrift: () => void;
   onClose: () => void;
   /** Open a playlist in the editor. */
   onOpenPlaylist: (file: string) => void;
@@ -118,11 +125,26 @@ export default function StatusView({
           <button
             className="btn ghost"
             onClick={onCheckDrift}
-            disabled={busy || driftBusy || remoteCount === 0}
-            title="Check each playlist against Spotify (one lightweight request per playlist)"
+            disabled={busy || driftScan !== null || blocked || remoteCount === 0}
+            title={
+              blocked
+                ? "Paused — Spotify's rate limit is in force"
+                : `Check each playlist against Spotify (${remoteCount} lightweight request${
+                    remoteCount === 1 ? "" : "s"
+                  }, one per playlist)`
+            }
           >
-            {driftBusy ? "Checking drift…" : driftChecked ? "Re-check drift" : "Check for drift"}
+            {driftScan
+              ? `Checking ${driftScan.done} of ${driftScan.total}…`
+              : driftChecked
+              ? "Re-check drift"
+              : `Check for drift (${remoteCount})`}
           </button>
+          {driftScan && (
+            <button className="btn ghost" onClick={onCancelDrift} title="Stop after the request in flight">
+              Cancel
+            </button>
+          )}
           <button className="btn ghost" onClick={onClose}>
             Close
           </button>

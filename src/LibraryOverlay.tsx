@@ -8,7 +8,7 @@
 // One tagged union says which panel is open and carries exactly that panel's data, so the
 // impossible states are gone and a new panel is one variant plus one arm.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   api,
   type Features,
@@ -22,6 +22,7 @@ import StaleView from "./StaleView";
 import StatusView, { type DriftState } from "./StatusView";
 import SimilarityView from "./SimilarityView";
 import type { CrossDupGroup } from "./lint";
+import { useRateLimit } from "./rateLimit";
 
 export type OverlayKind = "songs" | "doctor" | "stale" | "status" | "similarity";
 
@@ -84,30 +85,50 @@ export default function LibraryOverlay({
   // starts from an unchecked list rather than showing last time's answers as if they were
   // current.
   const [driftMap, setDriftMap] = useState<Record<string, DriftState>>({});
-  const [driftBusy, setDriftBusy] = useState(false);
+  const [driftScan, setDriftScan] = useState<{ done: number; total: number } | null>(null);
+  const cancelDrift = useRef(false);
+  const { blocked } = useRateLimit();
 
-  // Check every remote playlist for drift, one cheap snapshot request at a time. The backend
-  // rate limiter paces the calls; a rate-limit (or other) error stops the run and surfaces.
+  /// Drop any in-flight "checking" marker so a stopped run doesn't leave a row spinning.
+  /// Returns the same object when there's nothing to clear, so React can skip the re-render.
+  function clearChecking() {
+    setDriftMap((m) => {
+      const stale = Object.keys(m).filter((k) => m[k] === "checking");
+      if (stale.length === 0) return m;
+      const next = { ...m };
+      for (const k of stale) delete next[k];
+      return next;
+    });
+  }
+
+  // Check every remote playlist for drift, one cheap snapshot request at a time.
+  //
+  // This is the most expensive thing the app does on demand: one request per playlist,
+  // paced by the backend's rate limiter, and each playlist that HAS drifted then costs a
+  // full paginated track download to work out what changed. On a large library that is
+  // minutes of work, so it reports progress and can be stopped — and results already in
+  // hand are kept, so stopping (or hitting the rate limit) isn't wasted.
   async function checkAllDrift(local: LocalPlaylist[] | null) {
     const targets = (local ?? []).filter((p) => !p.archived && p.spotify_id !== "");
     if (targets.length === 0) return;
-    setDriftBusy(true);
+    cancelDrift.current = false;
+    setDriftScan({ done: 0, total: targets.length });
+    let done = 0;
     try {
       for (const p of targets) {
+        if (cancelDrift.current) break;
         setDriftMap((m) => ({ ...m, [p.file]: "checking" }));
         const s = await api.syncStatus(p.file);
         setDriftMap((m) => ({ ...m, [p.file]: s.remote_changed ? "drifted" : "clean" }));
+        setDriftScan({ done: ++done, total: targets.length });
       }
     } catch (e) {
-      // Drop the in-flight "checking" marker so it doesn't hang, and surface the reason.
-      setDriftMap((m) => {
-        const next = { ...m };
-        for (const k of Object.keys(next)) if (next[k] === "checking") delete next[k];
-        return next;
-      });
-      onError(String(e));
+      // Say how far it got: the checked playlists keep their results, and the rest are
+      // simply unchecked rather than silently assumed clean.
+      onError(`Drift check stopped after ${done} of ${targets.length} — ${e}`);
     } finally {
-      setDriftBusy(false);
+      clearChecking();
+      setDriftScan(null);
     }
   }
 
@@ -149,8 +170,12 @@ export default function LibraryOverlay({
           data={overlay.data}
           busy={busy}
           driftMap={driftMap}
-          driftBusy={driftBusy}
+          driftScan={driftScan}
+          blocked={blocked}
           onCheckDrift={() => void checkAllDrift(local)}
+          onCancelDrift={() => {
+            cancelDrift.current = true;
+          }}
           onClose={onClose}
           onOpenPlaylist={onOpenPlaylist}
         />
