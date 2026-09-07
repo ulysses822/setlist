@@ -3,10 +3,8 @@ import {
   api,
   type Aggregates,
   type Features,
-  type HistoryReport,
   type LocalPlaylist,
   type LocalTrackHit,
-  type NamedPlaylist,
   type PlaylistFile,
   type PushStrategy,
   type ReplacementSuggestion,
@@ -39,11 +37,11 @@ import {
   type CrossDupGroup,
   type DupGroup,
 } from "./lint";
-import AllSongsView from "./AllSongsView";
-import DoctorView from "./DoctorView";
-import StaleView from "./StaleView";
-import StatusView, { type DriftState } from "./StatusView";
-import SimilarityView from "./SimilarityView";
+import LibraryOverlay, {
+  emptyOverlay,
+  type Overlay,
+  type OverlayKind,
+} from "./LibraryOverlay";
 import { fmtDuration, fmtTotal } from "./format";
 import {
   ConfirmModal,
@@ -180,42 +178,20 @@ export default function Library() {
   const [menuOpen, setMenuOpen] = useState(false); // editor header ⋮ menu
   const [editMeta, setEditMeta] = useState(false); // editing title/description inline
 
-  // Cleanup "doctor": per-playlist issues panel + library-wide scan.
+  // Cleanup "doctor": the per-playlist issues panel (the library-wide scan is an overlay).
   const [issuesOpen, setIssuesOpen] = useState(false);
-  const [doctorOpen, setDoctorOpen] = useState(false);
-  const [doctorData, setDoctorData] = useState<NamedPlaylist[] | null>(null);
-  const [doctorBusy, setDoctorBusy] = useState(false);
   // Replacement search for unavailable tracks, keyed by full track id: "loading", a found
   // suggestion, or null (searched, nothing close). Absent = not searched yet.
   const [replaceState, setReplaceState] = useState<
     Record<string, ReplacementSuggestion | "loading" | null>
   >({});
 
-  // Global library view: every song across all playlists.
-  const [libraryOpen, setLibraryOpen] = useState(false);
-  const [libraryData, setLibraryData] = useState<NamedPlaylist[] | null>(null);
-  const [libraryBusy, setLibraryBusy] = useState(false);
+  // The library-wide panel currently taking over the editor pane, if any, and whether its
+  // loader is still running. One value for all five (see LibraryOverlay): they are
+  // alternatives, so opening one cannot leave another behind.
+  const [overlay, setOverlay] = useState<Overlay | null>(null);
+  const [overlayBusy, setOverlayBusy] = useState(false);
 
-  // Stale-track view: every song joined with how recently it was played.
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [historyData, setHistoryData] = useState<NamedPlaylist[] | null>(null);
-  const [historyReport, setHistoryReport] = useState<HistoryReport | null>(null);
-  const [historyBusy, setHistoryBusy] = useState(false);
-
-  // Status dashboard: a git-status-style overview across all playlists. Local signals
-  // (unpushed edits, lint counts) render immediately; drift is checked on demand.
-  const [statusOpen, setStatusOpen] = useState(false);
-  const [statusLocal, setStatusLocal] = useState<LocalPlaylist[] | null>(null);
-  const [statusData, setStatusData] = useState<NamedPlaylist[] | null>(null);
-  const [statusBusy, setStatusBusy] = useState(false);
-  const [driftMap, setDriftMap] = useState<Record<string, DriftState>>({});
-  const [driftBusy, setDriftBusy] = useState(false);
-
-  // Similarity map: 2D PCA projection of every playlist's mean feature vector.
-  const [similarityOpen, setSimilarityOpen] = useState(false);
-  const [similarityData, setSimilarityData] = useState<NamedPlaylist[] | null>(null);
-  const [similarityFeat, setSimilarityFeat] = useState<Record<string, Features> | null>(null);
-  const [similarityBusy, setSimilarityBusy] = useState(false);
   const archivedFiles = useMemo(
     () => new Set(playlists.filter((p) => p.archived).map((p) => p.file)),
     [playlists]
@@ -466,11 +442,7 @@ export default function Library() {
       setSortKey("index"); // open in official order
       setSortDir("asc");
       setIssuesOpen(false);
-      setDoctorOpen(false);
-      setLibraryOpen(false);
-      setHistoryOpen(false);
-      setStatusOpen(false);
-      setSimilarityOpen(false);
+      setOverlay(null); // a playlist takes the pane back from whichever panel had it
       const merged =
         cached && stagedTracks
           ? {
@@ -637,107 +609,56 @@ export default function Library() {
     }
   }
 
-  // Library-wide scan: (re)load every playlist's effective tracks for the doctor view.
-  async function openDoctor() {
+  // Open one of the library-wide panels: stage any pending edits (the panels read from disk,
+  // so unsaved work would be invisible to them), show the panel immediately in its loading
+  // state, then fill it in. One entry point for all five — the previous five near-identical
+  // openers each had to remember to close the other four.
+  async function openOverlay(kind: OverlayKind, load: () => Promise<Overlay>) {
     if (!(await flushDirtyEdits())) return;
-    setDoctorOpen(true);
-    setLibraryOpen(false);
-    setHistoryOpen(false);
-    setStatusOpen(false);
-    setSimilarityOpen(false);
-    setDoctorBusy(true);
+    setOverlay(emptyOverlay(kind));
+    setOverlayBusy(true);
     try {
-      setDoctorData(await api.readAllPlaylists());
+      setOverlay(await load());
     } catch (e) {
       setStatus({ kind: "err", msg: String(e) });
     } finally {
-      setDoctorBusy(false);
+      setOverlayBusy(false);
     }
   }
 
-  // Open the global library: every song across every playlist, deduped (see AllSongsView).
-  async function openLibrary() {
-    if (!(await flushDirtyEdits())) return;
-    setLibraryOpen(true);
-    setDoctorOpen(false);
-    setHistoryOpen(false);
-    setStatusOpen(false);
-    setSimilarityOpen(false);
-    setLibraryBusy(true);
-    try {
-      setLibraryData(await api.readAllPlaylists());
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      setLibraryBusy(false);
-    }
-  }
+  const openSongs = () =>
+    openOverlay("songs", async () => ({ kind: "songs", data: await api.readAllPlaylists() }));
 
-  // Open the stale-track view: every song joined with its play history (see StaleView).
-  async function openHistory() {
-    if (!(await flushDirtyEdits())) return;
-    setHistoryOpen(true);
-    setLibraryOpen(false);
-    setDoctorOpen(false);
-    setStatusOpen(false);
-    setSimilarityOpen(false);
-    setHistoryBusy(true);
-    try {
-      const [playlists, report] = await Promise.all([
+  const openDoctor = () =>
+    openOverlay("doctor", async () => ({ kind: "doctor", data: await api.readAllPlaylists() }));
+
+  const openStale = () =>
+    openOverlay("stale", async () => {
+      const [data, history] = await Promise.all([
         api.readAllPlaylists(),
         api.historyStats(),
       ]);
-      setHistoryData(playlists);
-      setHistoryReport(report);
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      setHistoryBusy(false);
-    }
-  }
+      return { kind: "stale", data, history };
+    });
 
-  // Open the status dashboard: a library-wide overview of unpushed edits, drift, and lint
-  // issues. The local signals load here; drift is checked separately (see checkAllDrift).
-  async function openStatus() {
-    if (!(await flushDirtyEdits())) return;
-    setStatusOpen(true);
-    setLibraryOpen(false);
-    setDoctorOpen(false);
-    setHistoryOpen(false);
-    setSimilarityOpen(false);
-    setStatusBusy(true);
-    setDriftMap({}); // stale drift results don't carry across opens
-    try {
+  const openStatus = () =>
+    openOverlay("status", async () => {
       const [local, data] = await Promise.all([
         api.listLocalPlaylists(),
         api.readAllPlaylists(),
       ]);
-      setStatusLocal(local);
-      setStatusData(data);
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      setStatusBusy(false);
-    }
-  }
+      return { kind: "status", local, data };
+    });
 
-  // Open the similarity map: every playlist projected to 2D from its mean feature vector.
   // Needs features for ALL tracks across ALL playlists, so it reuses whatever's already in
   // featureMap and only fetches the rest (cached server-side, so repeat opens are cheap).
-  async function openSimilarity() {
-    if (!(await flushDirtyEdits())) return;
-    setSimilarityOpen(true);
-    setLibraryOpen(false);
-    setDoctorOpen(false);
-    setHistoryOpen(false);
-    setStatusOpen(false);
-    setSimilarityBusy(true);
-    try {
-      const playlists = await api.readAllPlaylists();
+  const openSimilarity = () =>
+    openOverlay("similarity", async () => {
+      const data = await api.readAllPlaylists();
       // Unique tracks across the whole library, minus ones we've already analyzed.
       const seen = new Set<string>();
       const missing: TrackEntry[] = [];
-      for (const pl of playlists) {
+      for (const pl of data) {
         for (const t of pl.tracks) {
           const id = bareId(t.id);
           if (seen.has(id)) continue;
@@ -746,41 +667,10 @@ export default function Library() {
         }
       }
       const fetched = missing.length ? await api.trackFeatures(missing) : {};
-      const merged = { ...featureMap, ...fetched };
-      setFeatureMap(merged); // reuse for the editor's metrics later
-      setSimilarityData(playlists);
-      setSimilarityFeat(merged);
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      setSimilarityBusy(false);
-    }
-  }
-
-  // Check every remote playlist for drift, one cheap snapshot request at a time. The backend
-  // rate limiter paces the calls; a rate-limit (or other) error stops the run and surfaces.
-  async function checkAllDrift() {
-    const targets = (statusLocal ?? []).filter((p) => !p.archived && p.spotify_id !== "");
-    if (targets.length === 0) return;
-    setDriftBusy(true);
-    try {
-      for (const p of targets) {
-        setDriftMap((m) => ({ ...m, [p.file]: "checking" }));
-        const s = await api.syncStatus(p.file);
-        setDriftMap((m) => ({ ...m, [p.file]: s.remote_changed ? "drifted" : "clean" }));
-      }
-    } catch (e) {
-      // Drop the in-flight "checking" marker so it doesn't hang, and surface the reason.
-      setDriftMap((m) => {
-        const next = { ...m };
-        for (const k of Object.keys(next)) if (next[k] === "checking") delete next[k];
-        return next;
-      });
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      setDriftBusy(false);
-    }
-  }
+      const feat = { ...featureMap, ...fetched };
+      setFeatureMap(feat); // reuse for the editor's metrics later
+      return { kind: "similarity", data, feat };
+    });
 
   // Search for a playable stand-in for an unavailable track (library first, then Spotify).
   async function findReplacement(t: TrackEntry) {
@@ -820,11 +710,13 @@ export default function Library() {
   // affected playlist so the change is reviewable in its diff before pushing.
   async function normalizeCrossDup(group: CrossDupGroup, keepId: string) {
     const keep = group.variants.find((v) => v.id === keepId);
-    if (!keep || !doctorData) return;
+    // Only reachable from the doctor panel, and it works off the scan that panel is showing.
+    const scanned = overlay?.kind === "doctor" ? overlay.data : null;
+    if (!keep || !scanned) return;
     const removeIds = new Set(group.variants.filter((v) => v.id !== keepId).map((v) => v.id));
     try {
       let changed = 0;
-      for (const pl of doctorData) {
+      for (const pl of scanned) {
         if (!pl.tracks.some((t) => removeIds.has(t.id))) continue;
         const replaced = pl.tracks.map((t) =>
           removeIds.has(t.id) ? { ...keep.track, added_at: t.added_at, added_by: t.added_by } : t
@@ -1673,15 +1565,15 @@ export default function Library() {
 
         <div className="sidebar-tools" role="group" aria-label="Library tools">
           <button
-            className={`tool-btn ${libraryOpen ? "active" : ""}`}
-            onClick={() => void openLibrary()}
+            className={`tool-btn ${overlay?.kind === "songs" ? "active" : ""}`}
+            onClick={() => void openSongs()}
             title="All songs — browse every song across all your playlists"
             aria-label="All songs"
           >
             <IcoSongs />
           </button>
           <button
-            className={`tool-btn ${doctorOpen ? "active" : ""}`}
+            className={`tool-btn ${overlay?.kind === "doctor" ? "active" : ""}`}
             onClick={() => void openDoctor()}
             title="Cleanup — scan your whole library for duplicate and unavailable tracks"
             aria-label="Cleanup"
@@ -1689,15 +1581,15 @@ export default function Library() {
             <IcoClean />
           </button>
           <button
-            className={`tool-btn ${historyOpen ? "active" : ""}`}
-            onClick={() => void openHistory()}
+            className={`tool-btn ${overlay?.kind === "stale" ? "active" : ""}`}
+            onClick={() => void openStale()}
             title="Stale tracks — find tracks you rarely or never play"
             aria-label="Stale tracks"
           >
             <IcoClock />
           </button>
           <button
-            className={`tool-btn ${statusOpen ? "active" : ""}`}
+            className={`tool-btn ${overlay?.kind === "status" ? "active" : ""}`}
             onClick={() => void openStatus()}
             title="Status — unpushed edits, drift from Spotify, and lint issues"
             aria-label="Status"
@@ -1705,7 +1597,7 @@ export default function Library() {
             <IcoStatus />
           </button>
           <button
-            className={`tool-btn ${similarityOpen ? "active" : ""}`}
+            className={`tool-btn ${overlay?.kind === "similarity" ? "active" : ""}`}
             onClick={() => void openSimilarity()}
             title="Similarity map — see which playlists have similar audio profiles"
             aria-label="Similarity map"
@@ -1716,48 +1608,19 @@ export default function Library() {
       </aside>
 
       <section className="editor">
-        {libraryOpen ? (
-          <AllSongsView
-            data={libraryData}
-            busy={libraryBusy}
-            onClose={() => setLibraryOpen(false)}
-            onOpenTrack={(file, trackId) => void open(file, trackId)}
-          />
-        ) : doctorOpen ? (
-          <DoctorView
-            data={doctorData}
-            busy={doctorBusy}
-            onClose={() => setDoctorOpen(false)}
-            onOpenPlaylist={(file) => void open(file)}
-            onNormalize={(group, keepId) => void normalizeCrossDup(group, keepId)}
-          />
-        ) : historyOpen ? (
-          <StaleView
-            data={historyData}
-            history={historyReport}
-            busy={historyBusy}
-            onClose={() => setHistoryOpen(false)}
-            onOpenTrack={(file, trackId) => void open(file, trackId)}
-          />
-        ) : statusOpen ? (
-          <StatusView
-            local={statusLocal}
-            data={statusData}
-            busy={statusBusy}
-            driftMap={driftMap}
-            driftBusy={driftBusy}
-            onCheckDrift={() => void checkAllDrift()}
-            onClose={() => setStatusOpen(false)}
-            onOpenPlaylist={(file) => void open(file)}
-          />
-        ) : similarityOpen ? (
-          <SimilarityView
-            data={similarityData}
-            feat={similarityFeat}
+        {overlay ? (
+          // Keyed on the panel so switching between them remounts: each panel's own scratch
+          // state (the status panel's drift results) belongs to that visit, not the next one.
+          <LibraryOverlay
+            key={overlay.kind}
+            overlay={overlay}
+            busy={overlayBusy}
             archived={archivedFiles}
-            busy={similarityBusy}
-            onClose={() => setSimilarityOpen(false)}
+            onClose={() => setOverlay(null)}
             onOpenPlaylist={(file) => void open(file)}
+            onOpenTrack={(file, trackId) => void open(file, trackId)}
+            onNormalize={(group, keepId) => void normalizeCrossDup(group, keepId)}
+            onError={(msg) => setStatus({ kind: "err", msg })}
           />
         ) : !draft ? (
           <div className="empty">Select a playlist to edit.</div>
