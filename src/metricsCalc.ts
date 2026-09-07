@@ -1,6 +1,10 @@
-// Client-side audio-feature math, shared by the editor's live metrics panel.
-// Mirrors the Rust aggregate math in metrics.rs so the radar/bars match the backend,
-// and re-keys outlier detection by track id (not array index) so it survives reorders.
+// Client-side audio-feature math: playlist aggregates, outlier detection and goal
+// deviations, behind the editor's metrics panel and per-track columns.
+//
+// All of it lives here and only here. The backend's metrics.rs fetches per-track features
+// from ReccoBeats and caches them, and stops there — nothing below has a Rust counterpart,
+// so there is no second implementation to keep in step. Outliers are keyed by track id
+// rather than array index, so they survive a reorder.
 
 import type { Aggregates, Features, TrackEntry } from "./api";
 
@@ -110,7 +114,9 @@ export function isLocalTrack(id: string): boolean {
   return id.startsWith("spotify:local:");
 }
 
-/// Mean of each tracked dimension over analyzed tracks — mirrors metrics.rs aggregates.
+/// Playlist-level summary: the mean of each tracked dimension over the tracks that have
+/// features (unanalyzed ones count toward `total` and the duration but not the averages,
+/// which are null until at least one track resolves).
 export function computeAggregates(
   tracks: TrackEntry[],
   feat: FeatureLookup
