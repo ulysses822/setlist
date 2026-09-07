@@ -35,12 +35,31 @@ jobs:
 
       - name: Commit history if changed
         run: |
-          if [[ -n "$(git status --porcelain history/plays.jsonl)" ]]; then
-            git config user.name "setlist-bot"
-            git config user.email "setlist-bot@users.noreply.github.com"
-            git add history/plays.jsonl
-            git commit -m "chore(history): log recently played [skip ci]"
-            git push
-          else
+          if [[ -z "$(git status --porcelain history/plays.jsonl)" ]]; then
             echo "No history changes."
+            exit 0
           fi
+          git config user.name "setlist-bot"
+          git config user.email "setlist-bot@users.noreply.github.com"
+          git add history/plays.jsonl
+          git commit -m "chore(history): log recently played [skip ci]"
+
+          # You push to this repo too -- Setlist's version-control panel commits playlists to
+          # it -- so the remote can have moved on since this job checked out. A bare `git push`
+          # would just fail, and a failed run isn't only a red X: recently-played goes back
+          # 50 tracks, so enough missed runs become a permanent hole in the log. Rebase onto
+          # whatever landed and try again. The concurrency group above already stops this job
+          # racing itself, so the only writer to reconcile with is you.
+          for attempt in 1 2 3; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt of 3) -- rebasing onto the remote."
+            if ! git pull --rebase; then
+              git rebase --abort || true
+              echo "::error::history/plays.jsonl on the remote will not rebase cleanly. The log is append-only, so this usually means it was hand-edited or rewritten. Resolve it in a checkout and re-run."
+              exit 1
+            fi
+          done
+          echo "::error::Still could not push after 3 attempts."
+          exit 1

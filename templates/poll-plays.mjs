@@ -70,12 +70,23 @@ async function fetchRecent(accessToken) {
     throw new Error(`recently-played failed: ${res.status} ${await res.text()}`);
   }
   const json = await res.json();
-  return json.items.map((it) => ({
-    track_id: it.track.uri,
-    played_at: it.played_at,
-    title: it.track.name,
-    artists: it.track.artists.map((a) => a.name),
-  }));
+  // Spotify's recently-played can carry items with no `track` — an episode the endpoint
+  // won't expand, or something pulled from the catalogue since it was played. Skip those
+  // rather than dying on `it.track.uri`: this runs on a cron with nobody watching, and one
+  // bad item shouldn't cost the whole poll.
+  const items = Array.isArray(json.items) ? json.items : [];
+  const plays = items
+    .filter((it) => it?.track?.uri && it?.played_at)
+    .map((it) => ({
+      track_id: it.track.uri,
+      played_at: it.played_at,
+      title: it.track.name ?? "",
+      artists: Array.isArray(it.track.artists) ? it.track.artists.map((a) => a.name) : [],
+    }));
+  if (plays.length < items.length) {
+    console.log(`Skipped ${items.length - plays.length} item(s) with no usable track.`);
+  }
+  return plays;
 }
 
 function loadExistingKeys() {
