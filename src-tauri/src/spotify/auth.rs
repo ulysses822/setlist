@@ -247,8 +247,7 @@ pub(crate) async fn ensure_token(state: &AppState, client_id: &str) -> Result<St
         }
     }
 
-    let refresh = load_refresh_token(KEYRING_USER)?
-        .ok_or_else(|| "Not connected to Spotify — click Connect first.".to_string())?;
+    let refresh = load_refresh_token(KEYRING_USER)?.ok_or_else(|| NOT_CONNECTED.to_string())?;
 
     let resp = state
         .http
@@ -297,6 +296,12 @@ pub(crate) async fn ensure_token(state: &AppState, client_id: &str) -> Result<St
 
 /// What the webview is told when we have no streaming grant to give it. Playback is the only
 /// thing affected; every other feature runs off the main token, which stays in this process.
+/// Deliberately doesn't say "click Connect" — connecting means going to Setup, starting an
+/// authorization, approving it in a browser and coming back. Naming one click undersells it,
+/// and leaves someone hunting for a button that isn't on the screen they're looking at.
+pub(crate) const NOT_CONNECTED: &str =
+    "Not connected to Spotify. Connect your account from the Setup tab.";
+
 pub(crate) const NO_STREAMING_GRANT: &str =
     "In-app playback isn't authorized yet — open Setup and click Connect Spotify to grant it. \
      Everything else works without it.";
