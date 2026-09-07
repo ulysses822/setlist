@@ -508,12 +508,21 @@ export default function Library() {
         if (pl.file === selected) draftApi.adoptStaged(deduped);
         changed++;
       }
-      setStatus({
-        kind: "ok",
-        msg: `Normalized "${group.title}" across ${changed} playlist${
-          changed > 1 ? "s" : ""
-        } (staged — open each to review and push)`,
-      });
+      // `changed` can be 0 if the scan behind the panel has gone stale — say so rather than
+      // reporting a normalization "across 0 playlists" that didn't happen.
+      setStatus(
+        changed === 0
+          ? {
+              kind: "err",
+              msg: `Nothing to normalize for "${group.title}" — the scan is out of date, it has been refreshed.`,
+            }
+          : {
+              kind: "ok",
+              msg: `Normalized "${group.title}" across ${changed} playlist${
+                changed === 1 ? "" : "s"
+              } (staged — open each to review and push)`,
+            }
+      );
       void openDoctor(); // rescan with the fixes applied
       void loadList();
     } catch (e) {
