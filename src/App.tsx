@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type PlaylistSummary, type ProbeStep, type Profile } from "./api";
 import Library from "./Library";
-import { PlaybackBar } from "./player";
+import { PlaybackBar, usePlayer } from "./player";
 import { useRateLimit } from "./rateLimit";
 import { GitChip, GitPanel, useGit } from "./git";
 import { ThemeToggle } from "./theme";
@@ -100,6 +100,7 @@ function App() {
   const [status, setStatus] = useState<{ kind: "ok" | "err"; msg: string } | null>(null);
   const { blocked } = useRateLimit();
   const git = useGit();
+  const player = usePlayer();
 
   // Success/status popups are transient: auto-dismiss after a few seconds. Errors stay
   // until the user dismisses them so they aren't missed.
@@ -177,6 +178,9 @@ function App() {
       const p = await api.login();
       setProfile(p);
       setConnected(true);
+      // The SDK may still be blocked on a token request from startup, when there was no
+      // streaming grant to answer with. There is one now, so answer it.
+      player?.retryToken();
       const who = p.display_name ?? p.id;
       // The second, playback-only authorization can fail on its own. Everything else is
       // connected, so this isn't a failed login — but it has to be said out loud, because the

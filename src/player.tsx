@@ -51,6 +51,8 @@ export interface PlayerApi {
   localDeviceId: string | null;
   refreshDevices: () => Promise<void>;
   transferTo: (deviceId: string) => void;
+  /** Deliver a token the SDK is still waiting for. See `retryToken` for why. */
+  retryToken: () => void;
 }
 
 const Ctx = createContext<PlayerApi | null>(null);
@@ -80,6 +82,23 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
   const [state, setState] = useState<PlaybackState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // `play` is deliberately identity-stable, so it can't close over `error`. It still needs to
+  // know whether one is already showing — see the guard in `play`.
+  const errorRef = useRef<string | null>(null);
+  errorRef.current = error;
+  // Why the SDK's last token request failed, if it did. Held rather than shown — see the
+  // getOAuthToken handler.
+  const tokenFailureRef = useRef<string | null>(null);
+  // The SDK asks for a token by handing over a callback, and then waits: the request isn't
+  // finished until that callback is called, however long that takes. On a fresh install the
+  // first ask lands before any streaming grant exists, so keep the callback and answer it
+  // once there is something to answer with (see `retryToken`).
+  //
+  // The obvious alternative — throw the player away and build a new one after connecting —
+  // does not work. The SDK claims page-global media infrastructure (EME/CDM) when the first
+  // Player is constructed; a second one never calls getOAuthToken and its connect() never
+  // settles. One player per page, for the life of the page.
+  const pendingTokenCb = useRef<((t: string) => void) | null>(null);
   const [volume, setVolumeState] = useState(0.8);
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   // Non-null while playback lives on another Spotify Connect device. Mirrored into a ref
@@ -161,7 +180,21 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const player = new Spotify.Player({
         name: "Setlist",
         getOAuthToken: (cb: (t: string) => void) => {
-          api.getAccessToken().then(cb).catch((e) => setError(String(e)));
+          api.getAccessToken().then(
+            (t) => {
+              tokenFailureRef.current = null;
+              pendingTokenCb.current = null;
+              cb(t);
+            },
+            (e) => {
+              // Not an error to show. The SDK asks the moment the app starts, so on a fresh
+              // install this fails before anyone has touched anything — greeting someone with
+              // a modal about a feature they haven't reached is no way to open. Keep the
+              // reason for `explainSilence`, and keep the callback for `retryToken`.
+              tokenFailureRef.current = String(e);
+              pendingTokenCb.current = cb;
+            }
+          );
         },
         volume: 0.8,
       });
@@ -294,11 +327,26 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   // Stable identity (only refs and setters inside) — it's part of the now-playing
   // context value, which must not churn with the position tick.
+  /// Say why nothing is going to play. `deviceRef` being empty can't tell these apart, and
+  /// they ask completely different things of the reader, so find out before answering.
+  const explainSilence = useCallback(async () => {
+    // A real SDK failure — no Premium, a bad init — is already the whole answer.
+    if (errorRef.current) return;
+    const connected = await api.authStatus().catch(() => false);
+    if (!connected) {
+      setError("Not connected to Spotify. Connect your account from the Setup tab to play here.");
+    } else if (tokenFailureRef.current) {
+      setError(tokenFailureRef.current);
+    } else {
+      setError("The player is still starting up — try that again in a moment.");
+    }
+  }, []);
+
   const play: PlayerApi["play"] = useCallback(async (contextUri, offsetUri, uris) => {
     // Honor the chosen output: if playback lives on another device, start there.
     const device = remoteRef.current?.id ?? deviceRef.current;
     if (!device) {
-      setError("Player isn't ready yet — give it a moment after connecting.");
+      await explainSilence();
       return;
     }
     // The SDK device can take a moment to become playable on Spotify's backend;
@@ -334,10 +382,31 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     playerRef.current?.setVolume?.(v);
   }, []);
 
+  /// Answer a token request the SDK is still waiting on. Called after a successful login:
+  /// the grant it needs may have only just come into existence, and the SDK will not ask
+  /// again by itself. Without this the player stays dead until the app is restarted, which
+  /// nothing in the UI would ever tell you to do.
+  const retryToken = useCallback(() => {
+    const cb = pendingTokenCb.current;
+    if (!cb) return; // nothing waiting: either it never failed, or it's already answered
+    api.getAccessToken().then(
+      (t) => {
+        tokenFailureRef.current = null;
+        pendingTokenCb.current = null;
+        setError(null);
+        cb(t);
+      },
+      (e) => {
+        tokenFailureRef.current = String(e);
+      }
+    );
+  }, []);
+
   const value: PlayerApi = {
     ready,
     state,
     error,
+    retryToken,
     clearError: () => setError(null),
     play,
     toggle: () => {
