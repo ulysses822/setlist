@@ -1,0 +1,71 @@
+name: Bug report
+description: Something in the app or the history poller doesn't work
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Don't paste tokens or secrets.** Setlist's status messages and the poller's workflow
+        logs can contain a Spotify access token, a refresh token or your client secret. Redact
+        anything that looks like one before pasting — a token is enough to read and rewrite your
+        playlists on its own.
+
+        Security bugs don't go here at all: see [SECURITY.md](https://github.com/ulysses822/setlist/blob/main/SECURITY.md).
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did it happen?
+      options:
+        - The desktop app
+        - The history poller (the GitHub Action in my data repo)
+        - The get-refresh-token.mjs script
+        - Somewhere else / not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect instead?
+      description: The error message verbatim if there was one, redacted as above.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How do you reproduce it?
+      placeholder: |
+        1. Open the Library tab
+        2. ...
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Setlist version
+      description: From the installer's file name, or the commit you built from.
+      placeholder: v0.1.0, or 9ad327a
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: Run `winver`, or Settings → System → About.
+      placeholder: Windows 11 24H2
+    validations:
+      required: false
+
+  - type: textarea
+    id: data
+    attributes:
+      label: Anything about your data folder that might matter?
+      description: >
+        Roughly how many playlists, whether it's a git repo with a remote, whether the folder is
+        on OneDrive or a network drive. Skip this if it clearly isn't relevant.
+    validations:
+      required: false

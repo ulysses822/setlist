@@ -1,0 +1,10 @@
+# Blank issues stay enabled: "this is confusing" doesn't fit a form, and CONTRIBUTING.md
+# explicitly invites it.
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/ulysses822/setlist/security/advisories/new
+    about: Don't open a public issue. Report it privately here — see SECURITY.md.
+  - name: Setup help
+    url: https://github.com/ulysses822/setlist#getting-started
+    about: Getting started, the Spotify app you need, and where your data lives.

@@ -75,6 +75,11 @@ Stop the history logger losing a run to a race or a null track
 Put the reasoning in the body. One concern per commit — a PR of four small commits is easier
 to review, and much easier to revert, than one large one.
 
+## Conduct
+
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — one page, and short enough that one maintainer can
+actually enforce it. The summary is: criticise the code, not the person.
+
 ## Security
 
 Don't report a vulnerability in a public issue. [SECURITY.md](SECURITY.md) explains what to do
