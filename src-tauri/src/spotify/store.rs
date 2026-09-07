@@ -81,6 +81,15 @@ pub struct TrackEntry {
 /// never leave a truncated JSON behind: the loaders skip unparseable files, so a corrupt
 /// playlist would silently vanish from the library along with its contents.
 pub(crate) fn write_atomic(path: &std::path::Path, contents: &str) -> Result<(), String> {
+    // A write that would change nothing is skipped, because it isn't free. A pull rewrites
+    // every playlist file whether or not Spotify changed it, and rewriting identical bytes
+    // still moves the mtime — which is all git's stat cache compares. So the data repo showed
+    // all 76 playlists as modified after a pull that changed one of them, and the commit
+    // panel filled with "no track changes" lines describing files whose blobs were identical
+    // to HEAD. One read on a path that was about to write and rename anyway.
+    if std::fs::read_to_string(path).is_ok_and(|existing| existing == contents) {
+        return Ok(());
+    }
     let mut tmp_name = path.as_os_str().to_owned();
     tmp_name.push(".tmp");
     let tmp = PathBuf::from(tmp_name);
@@ -857,6 +866,55 @@ mod tests {
             cover_url: None,
             tracks,
         }
+    }
+
+    #[test]
+    fn an_unchanged_write_leaves_the_file_alone() {
+        let (dir, _staged) = temp_dirs("nowrite");
+        let path = dir.join("thing.json");
+
+        write_atomic(
+            &path,
+            "{
+  \"a\": 1
+}",
+        )
+        .unwrap();
+        let first = std::fs::metadata(&path).unwrap().modified().unwrap();
+
+        // Same bytes: the file must not be touched at all. Rewriting it would move the mtime,
+        // and git's stat cache reads nothing else — that is what filled the commit panel with
+        // playlists whose contents were identical to HEAD.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_atomic(
+            &path,
+            "{
+  \"a\": 1
+}",
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().modified().unwrap(),
+            first,
+            "an identical write moved the mtime"
+        );
+
+        // Different bytes still land.
+        write_atomic(
+            &path,
+            "{
+  \"a\": 2
+}",
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{
+  \"a\": 2
+}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
