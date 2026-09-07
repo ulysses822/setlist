@@ -190,31 +190,30 @@ struct ChangeDetail {
     is_playlist: bool,
 }
 
-/// Parse `git status --porcelain` into per-file change details, summarizing playlist edits
-/// by diffing the committed (HEAD) version against the working file. Skips `cache/`.
-fn changes(dir: &Path) -> Result<Vec<ChangeDetail>, String> {
-    // Read raw stdout (not run_ok): porcelain encodes status in the first two columns, so
-    // trimming would strip the leading space of an unstaged change and shift the path.
-    let raw = run(
-        dir,
-        &["-c", "core.quotePath=false", "status", "--porcelain=v1", "-uall"],
-    )?;
-    if !raw.status.success() {
-        return Err(String::from_utf8_lossy(&raw.stderr).trim().to_string());
-    }
-    let porcelain = String::from_utf8_lossy(&raw.stdout);
-
-    // Collect the raw rows first: pairing the two halves of a rename needs to see both before
-    // either is described.
+/// Split `git status --porcelain=v1 -z` output into one `(path, kind)` per changed file,
+/// dropping `cache/`.
+///
+/// Separate from `changes` so it can be tested against payloads this platform can't produce:
+/// a path holding a backslash or a `"` is ordinary on Linux and impossible on Windows, and
+/// the whole reason for `-z` is that those arrive intact rather than C-quoted.
+fn parse_status(porcelain: &str) -> Vec<(String, ChangeKind)> {
     let mut rows: Vec<(String, ChangeKind)> = Vec::new();
-    for line in porcelain.lines() {
-        if line.len() < 4 {
-            continue;
+    let mut fields = porcelain.split('\0');
+    while let Some(entry) = fields.next() {
+        if entry.len() < 4 {
+            continue; // including the empty field after the final NUL
         }
-        let code = &line[..2];
-        // Path begins at column 3; for renames git prints "old -> new" — keep the new path.
-        let raw = line[3..].trim();
-        let path = raw.rsplit(" -> ").next().unwrap_or(raw).trim_matches('"').to_string();
+        let code = &entry[..2];
+        // Columns 0-1 are the status, 2 is a space, and the rest is the path — the new one,
+        // for a rename.
+        let path = entry[3..].to_string();
+        // A rename or copy (`R`/`C` in the index column) is followed by its source path as a
+        // separate field. Nothing here wants it — `paired_renames` works moves out for itself,
+        // because git only reports one as a rename once it's staged — but it has to be stepped
+        // over, or it would be read as an entry of its own.
+        if code.starts_with('R') || code.starts_with('C') {
+            fields.next();
+        }
 
         if path.starts_with("cache/") {
             continue;
@@ -229,6 +228,29 @@ fn changes(dir: &Path) -> Result<Vec<ChangeDetail>, String> {
         };
         rows.push((path, kind));
     }
+    rows
+}
+
+/// Parse `git status --porcelain` into per-file change details, summarizing playlist edits
+/// by diffing the committed (HEAD) version against the working file. Skips `cache/`.
+fn changes(dir: &Path) -> Result<Vec<ChangeDetail>, String> {
+    // Read raw stdout (not run_ok): porcelain encodes status in the first two columns, so
+    // trimming would strip the leading space of an unstaged change and shift the path.
+    //
+    // `-z` is what makes the paths trustworthy. Without it, status C-quotes any path it
+    // considers unusual — and a single space is enough to trigger it, so `My Notes.md` in the
+    // data folder comes back as `"My Notes.md"`, escapes and all. `-z` emits the raw bytes
+    // instead, NUL-terminated, and puts a rename's old path in its own field rather than
+    // after a ` -> ` that a filename could contain. Nothing left to unquote or to guess at.
+    let raw = run(dir, &["status", "--porcelain=v1", "-z", "-uall"])?;
+    if !raw.status.success() {
+        return Err(String::from_utf8_lossy(&raw.stderr).trim().to_string());
+    }
+    let porcelain = String::from_utf8_lossy(&raw.stdout);
+
+    // Collect the raw rows first: pairing the two halves of a rename needs to see both before
+    // either is described.
+    let rows = parse_status(&porcelain);
 
     // A playlist file is named after its playlist, so renaming one moves it. Git only reports
     // that as a rename once it's staged; here, before any `git add`, it arrives as a delete
@@ -845,6 +867,83 @@ mod tests {
         assert_eq!(s.changes.len(), 1, "one playlist moved, not two files: {:?}", s.changes);
         assert_eq!(s.changes[0].summary, "Rename \"Road Trip\" → \"Long Drives\"");
         assert_eq!(s.changes[0].path, "playlists/long-drives.json");
+
+        let _ = std::fs::remove_dir_all(&work);
+    }
+
+    #[test]
+    fn parse_status_takes_paths_verbatim_and_steps_over_a_rename_source() {
+        // A real `-z` payload: NUL after every field, nothing quoted or escaped. The two
+        // awkward paths are legal on Linux and impossible on Windows, which is exactly why
+        // they belong in a unit test rather than in the repo-backed one below.
+        let payload = concat!(
+            "?? My Notes.md\0",
+            "?? back\\slash.txt\0",
+            "?? a\"quote.txt\0",
+            "RM playlists/new.json\0playlists/old.json\0",
+            "?? x -> y.txt\0",
+            " D cache/audio-features.json\0",
+            "?? plain.txt\0",
+        );
+        let rows = parse_status(payload);
+        let paths: Vec<&str> = rows.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "My Notes.md",
+                "back\\slash.txt",
+                "a\"quote.txt",
+                // The rename's source is consumed, not mistaken for an entry of its own...
+                "playlists/new.json",
+                // ...so this one still lines up, `->` in the name and all.
+                "x -> y.txt",
+                "plain.txt", // cache/ dropped
+            ]
+        );
+        assert!(matches!(rows[3].1, ChangeKind::Modified));
+    }
+
+    #[test]
+    fn paths_survive_spaces_and_a_staged_rename() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let work = unique_dir("quoted");
+        git(&work, &["init", "-q"]);
+        git(&work, &["config", "user.name", "Test"]);
+        git(&work, &["config", "user.email", "test@example.com"]);
+        // A space is all it takes for `git status` to C-quote a path, and a data folder is a
+        // repo people keep their own files in. Non-ASCII rides along to prove the raw bytes
+        // come through, since the parser no longer sets core.quotePath.
+        std::fs::write(work.join("My Notes.md"), "hi").unwrap();
+        std::fs::write(work.join("café list.md"), "hi").unwrap();
+        write_playlist(&work, "road-trip.json", "Road Trip", &["a"]);
+
+        let untracked = status(&work).unwrap();
+        let mut paths: Vec<&str> = untracked.changes.iter().map(|c| c.path.as_str()).collect();
+        paths.sort_unstable();
+        assert_eq!(
+            paths,
+            ["My Notes.md", "café list.md", "playlists/road-trip.json"],
+            "paths came back quoted or escaped"
+        );
+
+        // A staged rename prints the old path as an extra field. Miss it and the next entry
+        // read is a bare path with no status code in front of it.
+        git(&work, &["add", "-A"]);
+        git(&work, &["commit", "-qm", "init"]);
+        git(&work, &["mv", "My Notes.md", "Some Notes.md"]);
+        std::fs::write(work.join("after the rename.md"), "hi").unwrap();
+
+        let renamed = status(&work).unwrap();
+        let mut paths: Vec<&str> = renamed.changes.iter().map(|c| c.path.as_str()).collect();
+        paths.sort_unstable();
+        assert_eq!(
+            paths,
+            ["Some Notes.md", "after the rename.md"],
+            "the rename's source path was read as an entry of its own"
+        );
 
         let _ = std::fs::remove_dir_all(&work);
     }
