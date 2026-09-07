@@ -125,6 +125,9 @@ The Rust half is Windows-only (see [Platform support](#platform-support)), so `n
 Please add a test with a behaviour change — the suite is where the sync engine's invariants are
 written down, and it's the only thing standing between a refactor and someone's real playlists.
 
+[CONTRIBUTING.md](CONTRIBUTING.md) has the rest: what a PR wants to look like, the commit
+convention, and why the Windows-only build isn't a bug to be fixed in passing.
+
 ### The listening-history logger (optional)
 
 The logger runs in **your data repo's** GitHub Actions, keeping personal play history and
