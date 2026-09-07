@@ -38,6 +38,11 @@ import { createHash, randomBytes } from "node:crypto";
 
 const REDIRECT = "http://127.0.0.1:8888/callback";
 const SCOPE = "user-read-recently-played";
+// Matches the desktop app's loopback catcher (src-tauri/src/spotify/auth.rs). The port is not
+// negotiable: Spotify matches the redirect URI exactly against the one registered on the
+// dashboard, so it has to be the same 8888 the README tells you to register.
+const LISTEN_TIMEOUT_MS = 5 * 60_000;
+const TIMEOUT_MINS = Math.round(LISTEN_TIMEOUT_MS / 60_000);
 
 const clientId = process.argv[2] ?? process.env.SPOTIFY_CLIENT_ID ?? "";
 if (!clientId) {
@@ -194,7 +199,32 @@ const server = createServer(async (req, res) => {
   process.exit(0);
 });
 
+// Abandoning the browser tab used to leave this process listening forever, holding port 8888
+// so the next attempt -- here or in the app -- could not bind. Give up the way the app does.
+const giveUp = setTimeout(() => {
+  console.error(
+    `\nTimed out after ${TIMEOUT_MINS} minutes with no answer from Spotify. Nothing was` +
+      "\nchanged; re-run to try again."
+  );
+  server.close();
+  process.exit(1);
+}, LISTEN_TIMEOUT_MS);
+// The timer must not be the only thing holding the process open.
+giveUp.unref();
+
+server.on("error", (e) => {
+  // Almost always EADDRINUSE: an in-progress Setlist login, or an earlier run of this script
+  // still waiting. Both bind 8888, and the message should say so rather than print a stack.
+  console.error(
+    `\nCannot listen on 127.0.0.1:8888: ${e.message}\n` +
+      "Is a Setlist login, or another run of this script, already in progress? Close it and\n" +
+      "re-run."
+  );
+  process.exit(1);
+});
+
 server.listen(8888, "127.0.0.1", () => {
   console.log("Open this URL in your browser and approve access:\n");
   console.log(authUrl + "\n");
+  console.log(`Waiting up to ${TIMEOUT_MINS} minutes for you to approve...\n`);
 });
