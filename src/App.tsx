@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { api, type PlaylistSummary, type ProbeStep, type Profile } from "./api";
 import Library from "./Library";
 import { PlaybackBar, usePlayer } from "./player";
@@ -31,6 +31,10 @@ function Nav({
   connected: boolean;
 }) {
   const { blocked, secondsLeft } = useRateLimit();
+  // Shown in the topbar rather than a tab's status line because it outlives any one action and
+  // applies wherever you are: the goals you set in Library fail to save just as silently as the
+  // hub repo you typed in Setup.
+  const saveError = useSyncExternalStore(prefs.subscribeSaveError, prefs.getSaveError);
   return (
     <nav className="topbar">
       <span className="brand">Setlist</span>
@@ -55,6 +59,11 @@ function Nav({
             title="Spotify's rate limit was hit. Actions that call Spotify are paused until this clears (retrying now would only extend the wait)."
           >
             ⏳ Rate-limited · {fmtCooldown(secondsLeft)}
+          </span>
+        )}
+        {saveError && (
+          <span className="saveerror-chip" title={saveError}>
+            Settings not saving
           </span>
         )}
         <GitChip />

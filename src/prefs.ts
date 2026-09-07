@@ -12,7 +12,13 @@ import { FEATURE_META, GOAL_DIMS, type FeatureKey, type Goal, type GoalDim } fro
 // Both stores load once at startup and are cached here. Reads stay synchronous, which is what
 // lets the callers keep their shape — they run during render. Writes update the cache and fire
 // a save without waiting: losing a column toggle to a failed write is not worth an await, and
-// the next successful write carries it anyway.
+// the next successful write carries it anyway, since each save writes the whole store.
+//
+// That self-healing holds for a write that fails once. It does not hold for a data folder that
+// has stopped being writable — deleted, unmounted, gone read-only — where every save fails and
+// the argument above quietly becomes "your work only exists in this window until you close it".
+// So a failed save is remembered and published (see `subscribeSaveError`); the topbar shows it
+// for as long as it lasts, and the next save that succeeds clears it.
 //
 // The theme is deliberately NOT here. It describes the machine you're looking at, not the
 // library you're editing, so it stays in localStorage (see theme.tsx).
@@ -41,6 +47,11 @@ export async function loadPrefs(): Promise<void> {
     goals = (g ?? {}) as Goals;
     ui = (u ?? {}) as UiState;
     loaded = true;
+    // A different data folder (or a retry of the same one) gets a clean verdict — the previous
+    // folder's failure says nothing about this one.
+    goalsError = null;
+    uiError = null;
+    publishSaveError();
     importFromLocalStorage();
   } catch {
     goals = {};
@@ -49,12 +60,67 @@ export async function loadPrefs(): Promise<void> {
   }
 }
 
+// --- save failures ----------------------------------------------------------
+
+// Tracked per store, so a working `cache/ui-state.json` write can't clear a real failure to
+// write `goals.json`. `saveError` is the cached combination the UI subscribes to: a plain
+// string, so `useSyncExternalStore` can compare snapshots by value.
+let goalsError: string | null = null;
+let uiError: string | null = null;
+let saveError: string | null = null;
+const saveErrorListeners = new Set<() => void>();
+
+function publishSaveError() {
+  const next = goalsError ?? uiError;
+  if (next === saveError) return;
+  saveError = next;
+  for (const listener of saveErrorListeners) listener();
+}
+
+/** The current save failure, or null while saves are working. */
+export function getSaveError(): string | null {
+  return saveError;
+}
+
+/** Subscribe to changes in `getSaveError()`. Returns an unsubscribe function. */
+export function subscribeSaveError(listener: () => void): () => void {
+  saveErrorListeners.add(listener);
+  return () => {
+    saveErrorListeners.delete(listener);
+  };
+}
+
+/** Fire a write and record whether it worked. Deliberately not awaited by callers — the point
+ *  is to report a persistent failure, not to make every column toggle wait on disk. */
+function save(what: string, write: Promise<void>, assign: (msg: string | null) => void) {
+  void write.then(
+    () => {
+      assign(null);
+      publishSaveError();
+    },
+    (e: unknown) => {
+      assign(
+        `Couldn't save your ${what} to the data folder: ${String(e)}. They're still in this ` +
+          `window and the next successful save will include them, but closing Setlist loses ` +
+          `them. Check the data folder still exists and is writable.`
+      );
+      publishSaveError();
+    }
+  );
+}
+
 function saveGoals() {
-  if (loaded) void api.setGoals(goals).catch(() => {});
+  if (!loaded) return;
+  save("mood goals", api.setGoals(goals), (msg) => {
+    goalsError = msg;
+  });
 }
 
 function saveUi() {
-  if (loaded) void api.setUiState(ui).catch(() => {});
+  if (!loaded) return;
+  save("view settings", api.setUiState(ui), (msg) => {
+    uiError = msg;
+  });
 }
 
 // --- goals ------------------------------------------------------------------

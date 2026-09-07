@@ -532,6 +532,20 @@ body {
   white-space: nowrap;
 }
 
+/* Same shape as .ratelimit-chip, in the error colour: unlike a rate limit this won't clear on
+   its own, it clears when a save works. */
+.saveerror-chip {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--err);
+  background: rgb(var(--err-rgb) / 0.12);
+  border: 1px solid rgb(var(--err-rgb) / 0.4);
+  border-radius: 999px;
+  padding: 3px 10px;
+  white-space: nowrap;
+  cursor: help;
+}
+
 .shell .app {
   overflow-y: auto;
 }
