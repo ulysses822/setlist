@@ -38,16 +38,22 @@ export default tseslint.config(
     },
     rules: {
       // --- react-hooks v7 ships the React Compiler's rules. This app is not built with the
-      // compiler, and these four flag patterns it holds deliberately and documents in place:
+      // compiler, and they flag patterns it holds deliberately and documents in place:
       // `errorRef.current = error` during render so `play` can stay identity-stable, reading
       // `deviceRef.current` in the value memo, `Date.now()` during a "how stale is this?"
       // render, and effects that sync one derived flag. Satisfying them means restructuring
-      // the player to please a compiler that isn't in the build. Off deliberately — revisit
-      // together if React Compiler is ever adopted, not one at a time.
+      // the player to please a compiler that isn't in the build.
+      //
+      // Off as a group, not one at a time, because they interact: the compiler stops at the
+      // first thing it can't analyse, so silencing one reveals the next. Library.tsx showed
+      // this — removing a single forward reference let it analyse far enough to start
+      // reporting `preserve-manual-memoization` on memos that had not changed at all.
+      // Revisit the whole set together if React Compiler is ever adopted.
       "react-hooks/refs": "off",
       "react-hooks/purity": "off",
       "react-hooks/immutability": "off",
       "react-hooks/set-state-in-effect": "off",
+      "react-hooks/preserve-manual-memoization": "off",
 
       // Stays on, and stays a warning. Every hit is a real question about whether a memo can
       // serve a stale result, but the answers are behavioural — changing a dependency array

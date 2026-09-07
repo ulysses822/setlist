@@ -10,6 +10,7 @@ import {
 import MetricsPanel from "./MetricsPanel";
 import { usePlaylistMetrics } from "./usePlaylistMetrics";
 import { usePlaylistDraft, type Status } from "./usePlaylistDraft";
+import { usePlaylistLibrary } from "./usePlaylistLibrary";
 import {
   bareId,
   FEATURE_LABEL,
@@ -93,7 +94,6 @@ const IcoMap = () => (
 );
 
 export default function Library() {
-  const [playlists, setPlaylists] = useState<LocalPlaylist[]>([]);
   const [mode, setMode] = useState<SidebarMode>("playlists");
   const [filter, setFilter] = useState("");
   const [hits, setHits] = useState<LocalTrackHit[]>([]);
@@ -103,9 +103,6 @@ export default function Library() {
   const [sortKey, setSortKey] = useState<SortKey>("index");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [status, setStatus] = useState<Status>(null);
-  // The sidebar's own load. Deliberately separate from the draft's `busy`: a list refresh
-  // can overlap a save or a push, and clearing one must not clear the other.
-  const [listBusy, setListBusy] = useState(false);
 
 
   const [query, setQuery] = useState("");
@@ -122,11 +119,6 @@ export default function Library() {
     resolve: (ok: boolean) => void;
   } | null>(null);
 
-  // Create / delete playlist modals (the modals own their inputs).
-  const [createOpen, setCreateOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<LocalPlaylist | null>(null);
-  const [deleting, setDeleting] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false); // editor header ⋮ menu
   const [editMeta, setEditMeta] = useState(false); // editing title/description inline
 
@@ -143,10 +135,6 @@ export default function Library() {
   // alternatives, so opening one cannot leave another behind.
   const [overlay, setOverlay] = useState<Overlay | null>(null);
   const [overlayBusy, setOverlayBusy] = useState(false);
-  const archivedFiles = useMemo(
-    () => new Set(playlists.filter((p) => p.archived).map((p) => p.file)),
-    [playlists]
-  );
 
   // Everything audio-feature-shaped for the open playlist — the cache, the derived
   // aggregates/outliers/goal, and the column and panel choices — lives in one hook. Named
@@ -156,6 +144,46 @@ export default function Library() {
   const player = useNowPlaying();
   const git = useGit();
   const { blocked } = useRateLimit();
+
+  // Which playlists exist, and every operation that changes that (see usePlaylistLibrary).
+  // It knows nothing about the editor: `create` hands back the new playlist and `onDeleted`
+  // reports the file that went, leaving both editor decisions here — which is what keeps the
+  // two hooks from depending on each other.
+  const lib = usePlaylistLibrary({
+    onStatus: setStatus,
+    confirm: confirmDialog,
+    refreshGit: () => git?.refresh(),
+    // Closes over `selected` and `draftApi`, declared just below. Safe because nothing calls
+    // this until a delete happens, long after both exist — the same forward reference the
+    // draft's own `onPlaylistsChanged` makes back the other way.
+    onDeleted: (file) => {
+      if (selected === file) draftApi.closeDeleted();
+    },
+  });
+  const {
+    playlists,
+    listBusy,
+    archivedFiles,
+    togglePin,
+    toggleArchive,
+    unfollowArchivedAll,
+    refollow,
+    createOpen,
+    setCreateOpen,
+    creating,
+    deleteTarget,
+    setDeleteTarget,
+    deleting,
+  } = lib;
+  const loadList = lib.reload;
+
+  // The two places the collection meets the editor: a playlist you just made should open,
+  // and one you just deleted should stop being open.
+  async function doCreate(name: string, description: string) {
+    const np = await lib.create(name, description);
+    if (np) void openPlaylist(np.file);
+  }
+  const doDelete = lib.remove;
 
   const draftApi = usePlaylistDraft({
     blocked,
@@ -249,118 +277,6 @@ export default function Library() {
       cur?.resolve(ok);
       return null;
     });
-  }
-
-  /// Re-read the sidebar, reporting a failure rather than leaving a stale list looking
-  /// authoritative — after a create or a delete, a silently stale sidebar is one the user is
-  /// about to act on.
-  ///
-  /// `alsoGit` re-reads the data-repo chip too, which costs a `git status` subprocess. Worth it
-  /// whenever a playlist file changed; wasted when only a staged draft did, since staging
-  /// writes to the gitignored `staged/` directory and leaves the repo untouched.
-  async function loadList(alsoGit = true) {
-    setListBusy(true);
-    try {
-      setPlaylists(await api.listLocalPlaylists());
-      if (alsoGit) git?.refresh();
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      setListBusy(false);
-    }
-  }
-
-  async function togglePin(p: LocalPlaylist) {
-    try {
-      await api.setPinned(p.file, !p.pinned);
-      void loadList();
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    }
-  }
-
-  async function doCreate(name: string, description: string) {
-    if (!name.trim()) return;
-    setCreating(true);
-    try {
-      const np = await api.createPlaylist(name.trim(), description.trim());
-      setCreateOpen(false);
-      await loadList();
-      void openPlaylist(np.file);
-      setStatus({ kind: "ok", msg: `Created "${np.name}"` });
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      setCreating(false);
-    }
-  }
-
-  async function doDelete() {
-    if (!deleteTarget) return;
-    setDeleting(true);
-    try {
-      await api.deletePlaylist(deleteTarget.file);
-      const name = deleteTarget.name;
-      if (selected === deleteTarget.file) draftApi.closeDeleted();
-      setDeleteTarget(null);
-      await loadList();
-      setStatus({ kind: "ok", msg: `Deleted "${name}"` });
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      setDeleting(false);
-    }
-  }
-
-  async function toggleArchive(file: string, currentlyArchived: boolean) {
-    try {
-      await api.setArchived(file, !currentlyArchived);
-      setStatus({
-        kind: "ok",
-        msg: currentlyArchived
-          ? "Unarchived"
-          : "Archived (still on Spotify until you unfollow)",
-      });
-      void loadList();
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    }
-  }
-
-  async function unfollowArchivedAll() {
-    const n = playlists.filter((p) => p.archived).length;
-    if (n === 0) return;
-    if (
-      !(await confirmDialog(
-        `Unfollow ${n} archived playlist(s) from Spotify?\n\nThey'll be removed from your Spotify library but kept in Setlist. You stay the owner, so editing/playback still work, and you can re-add them later.`,
-        "Unfollow"
-      ))
-    )
-      return;
-    try {
-      const r = await api.unfollowArchived();
-      if (r.failed.length > 0) {
-        setStatus({
-          kind: "err",
-          msg: `Unfollowed ${r.done}, but ${r.failed.length} failed: ${r.failed[0]}${
-            r.failed.length > 1 ? ` (+${r.failed.length - 1} more)` : ""
-          }`,
-        });
-      } else {
-        setStatus({ kind: "ok", msg: `Unfollowed ${r.done} playlist(s) from Spotify` });
-      }
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    }
-  }
-
-  async function refollow(file: string) {
-    try {
-      await api.followPlaylist(file);
-      setStatus({ kind: "ok", msg: "Re-added to your Spotify library" });
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    }
   }
 
   // Fetch audio features for the given tracks in the background and merge them in.
