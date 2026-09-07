@@ -47,6 +47,14 @@ playlist is stored under must likewise be a single path component with no `:` in
 (`safe_name` in `src-tauri/src/spotify/store.rs`), so nothing in the folder can name a path
 outside it.
 
+Committing from the app stages the whole data folder (`git add -A`), so before it does,
+`ensure_ignored` in `src-tauri/src/git.rs` makes sure `.gitignore` covers `.env` and
+`.env.local` as well as the rebuildable cache and unpushed drafts. That matters because the
+history logger lives in the data repo and `.env.example` documents putting a client secret and
+refresh token in a `.env` next to it — without the rule, one Commit and Push would publish
+them. A `.env` you had already committed before this existed stays tracked, and its secrets
+should be treated as public: rotate them.
+
 Every workflow pins its actions to commit SHAs and installs with `npm ci --ignore-scripts`, so
 neither a hijacked action tag nor an npm install hook gets to run in CI. `ci.yml` builds the
 frontend and runs the Rust tests and clippy on every push to `main` and every pull request.

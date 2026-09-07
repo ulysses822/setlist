@@ -546,28 +546,51 @@ fn compose_message(details: &[ChangeDetail]) -> String {
 
 // --- commit & push ----------------------------------------------------------
 
-/// Ensure `.gitignore` excludes what `git add -A` must never pick up: the rebuildable
-/// feature cache, and staged edits, which are drafts rather than a synced state worth
-/// committing. Each rule is added independently, so a repo that already ignores one still
-/// gains the other. No-op once both are present.
-fn ensure_cache_ignored(dir: &Path) -> Result<(), String> {
-    const RULES: [(&str, &str); 2] = [
+/// Ensure `.gitignore` excludes what `git add -A` must never pick up.
+///
+/// Two kinds of thing. Local-only state — the rebuildable feature cache, and staged edits,
+/// which are drafts rather than a synced state worth committing. And credentials: the data
+/// repo is where the history logger lives, `.env.example` documents copying a `.env` next to
+/// it to run the poller locally, and that file holds the Spotify client secret and a refresh
+/// token. Without this rule `commit` stages it and `push` publishes it to GitHub, with the
+/// user having done nothing wrong.
+///
+/// Each rule is added independently, so a repo that already ignores one still gains the
+/// others. No-op once all are present.
+///
+/// This only stops a *future* commit. A `.env` already tracked in the data repo stays tracked
+/// (gitignore doesn't apply to tracked files), and its secrets are already published — the
+/// fix there is to rotate them, which no change here can do.
+fn ensure_ignored(dir: &Path) -> Result<(), String> {
+    // Written verbatim, so a directory rule carries its own trailing slash.
+    const RULES: [(&str, &str); 4] = [
         (
-            "cache",
+            "cache/",
             "# Derived audio-feature cache — rebuildable, keep out of git",
         ),
         (
-            "staged",
+            "staged/",
             "# Saved-but-unpushed edits — drafts, not a state to commit",
         ),
+        (
+            ".env",
+            "# Spotify client secret and refresh token for the poller — never commit",
+        ),
+        (".env.local", "# Same, for a machine-specific override"),
     ];
     let gi = dir.join(".gitignore");
     let existing = std::fs::read_to_string(&gi).unwrap_or_default();
     let mut next = existing.clone();
-    for (name, comment) in RULES {
+    for (pattern, comment) in RULES {
+        // Accept the equivalent spellings of the same rule rather than duplicating it: a repo
+        // that already ignores `cache` or `/cache/` needs nothing further from us.
+        let stem = pattern.trim_end_matches('/');
         let present = existing.lines().any(|l| {
             let t = l.trim();
-            t == name || t == format!("{name}/") || t == format!("/{name}/")
+            t == stem
+                || t == format!("{stem}/")
+                || t == format!("/{stem}")
+                || t == format!("/{stem}/")
         });
         if present {
             continue;
@@ -575,7 +598,7 @@ fn ensure_cache_ignored(dir: &Path) -> Result<(), String> {
         if !next.is_empty() && !next.ends_with('\n') {
             next.push('\n');
         }
-        next.push_str(&format!("{comment}\n{name}/\n"));
+        next.push_str(&format!("{comment}\n{pattern}\n"));
     }
     if next == existing {
         return Ok(());
@@ -590,7 +613,7 @@ pub fn commit(dir: &Path, message: &str) -> Result<RepoStatus, String> {
     if message.trim().is_empty() {
         return Err("Commit message can't be empty.".into());
     }
-    ensure_cache_ignored(dir)?;
+    ensure_ignored(dir)?;
 
     let add = run(dir, &["add", "-A"])?;
     if !add.status.success() {
@@ -1167,8 +1190,63 @@ mod tests {
         let _ = std::fs::remove_dir_all(&remote);
     }
 
+    /// The blocker this rule exists for: `.env.example` tells you to copy a `.env` next to
+    /// the poller in your data repo, and `commit` runs `git add -A` over that repo. Without
+    /// the ignore rule, one Commit + Push publishes a Spotify client secret and refresh token
+    /// to GitHub. Asserted end to end, against real git, because the ignore file being right
+    /// and the commit being clean are two different claims.
     #[test]
-    fn gitignore_gains_both_rules_without_disturbing_an_existing_one() {
+    fn a_dotenv_in_the_data_repo_is_never_committed() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let work = unique_dir("dotenv");
+        git(&work, &["init", "-q"]);
+        git(&work, &["config", "user.name", "T"]);
+        git(&work, &["config", "user.email", "t@e.com"]);
+        write_playlist(&work, "road.json", "Road Trip", &["a"]);
+        std::fs::write(
+            work.join(".env"),
+            "SPOTIFY_CLIENT_SECRET=hunter2\nSPOTIFY_REFRESH_TOKEN=AQC-secret\n",
+        )
+        .unwrap();
+
+        commit(&work, "Add Road Trip").unwrap();
+
+        let tracked = Command::new("git")
+            .arg("-C")
+            .arg(&work)
+            .args(["ls-files"])
+            .output()
+            .unwrap();
+        let tracked = String::from_utf8_lossy(&tracked.stdout);
+        assert!(
+            !tracked.lines().any(|l| l == ".env"),
+            "commit published .env — tracked files: {tracked}"
+        );
+        assert!(
+            tracked.lines().any(|l| l == "playlists/road.json"),
+            "the playlist itself should still be committed: {tracked}"
+        );
+        // The secret must not be anywhere in the committed tree, under any name.
+        let blob = Command::new("git")
+            .arg("-C")
+            .arg(&work)
+            .args(["grep", "-I", "hunter2", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(
+            !blob.status.success(),
+            "secret reached the commit: {}",
+            String::from_utf8_lossy(&blob.stdout)
+        );
+
+        let _ = std::fs::remove_dir_all(&work);
+    }
+
+    #[test]
+    fn gitignore_gains_every_rule_without_disturbing_an_existing_one() {
         let dir = std::env::temp_dir().join(format!(
             "setlist-ignore-{}",
             std::time::SystemTime::now()
@@ -1185,7 +1263,7 @@ mod tests {
 ",
         )
         .unwrap();
-        ensure_cache_ignored(&dir).unwrap();
+        ensure_ignored(&dir).unwrap();
         let gi = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
         assert_eq!(
             gi.matches("cache/").count(),
@@ -1193,10 +1271,26 @@ mod tests {
             "cache rule duplicated: {gi}"
         );
         assert!(gi.contains("staged/"), "staged rule missing: {gi}");
+        assert!(gi.contains(".env"), "credential rule missing: {gi}");
+
+        // `/cache/` and `cache` are the same rule spelled differently — neither should be
+        // duplicated, or every commit would grow the file.
+        for spelling in ["/cache/", "cache", ".env.local"] {
+            let dir = unique_dir("ignore-spelling");
+            std::fs::write(dir.join(".gitignore"), format!("{spelling}\n")).unwrap();
+            ensure_ignored(&dir).unwrap();
+            let gi = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+            assert_eq!(
+                gi.lines().filter(|l| l.trim() == spelling).count(),
+                1,
+                "{spelling} duplicated: {gi}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
 
         // And running again changes nothing.
         let before = gi;
-        ensure_cache_ignored(&dir).unwrap();
+        ensure_ignored(&dir).unwrap();
         assert_eq!(
             std::fs::read_to_string(dir.join(".gitignore")).unwrap(),
             before
