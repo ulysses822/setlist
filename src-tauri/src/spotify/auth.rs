@@ -233,17 +233,21 @@ async fn store_access(state: &AppState, token: &TokenResponse) {
     }
 }
 
-/// What the webview is told when we have no streaming grant to give it. Playback is the only
-/// thing affected; every other feature runs off the main token, which stays in this process.
-/// Deliberately doesn't say "click Connect" — connecting means going to Setup, starting an
-/// authorization, approving it in a browser and coming back. Naming one click undersells it,
-/// and leaves someone hunting for a button that isn't on the screen they're looking at.
+/// Shown when there is no main-family refresh token at all: nothing that talks to Spotify runs.
+///
+/// None of the messages in this module name a click, and a test below pins that. Connecting
+/// means going to Setup, starting an authorization, approving it in a browser and coming back.
+/// Naming one click undersells it, and leaves someone hunting for a button that isn't on the
+/// screen they're looking at — which is exactly what happens when the message is read from the
+/// Library tab, where most of them surface.
 pub(crate) const NOT_CONNECTED: &str =
     "Not connected to Spotify. Connect your account from the Setup tab.";
 
+/// What the webview is told when we have no streaming grant to give it. Playback is the only
+/// thing affected; every other feature runs off the main token, which stays in this process.
 pub(crate) const NO_STREAMING_GRANT: &str =
-    "In-app playback isn't authorized yet — open Setup and click Connect Spotify to grant it. \
-     Everything else works without it.";
+    "In-app playback isn't authorized yet — connect your account from the Setup tab to grant \
+     it. Everything else works without it.";
 
 /// Everything that differs between the two token families.
 ///
@@ -273,7 +277,7 @@ struct Family {
 const MAIN: Family = Family {
     user: KEYRING_USER,
     missing: NOT_CONNECTED,
-    revoked: "Spotify session expired or was revoked — click Connect to sign in again.",
+    revoked: "Spotify session expired or was revoked — reconnect your account from the Setup tab.",
     label: "Token refresh failed",
     records_scope: true,
     revokes_everything: true,
@@ -616,6 +620,28 @@ mod tests {
         // The confidential flow (mint_history_token) authenticates at the token exchange.
         let confidential = authorize_url("id", "a", "csrf", None);
         assert!(!confidential.contains("code_challenge"), "{confidential}");
+    }
+
+    /// Every message this module shows points at the Setup tab rather than at a click, for the
+    /// reason on `NOT_CONNECTED`. Pinned because the rule was written down once and then broken
+    /// twice: the strings live in four places and nothing connected them.
+    #[test]
+    fn no_message_promises_a_single_click() {
+        for msg in [
+            NOT_CONNECTED,
+            NO_STREAMING_GRANT,
+            MAIN.revoked,
+            STREAMING.revoked,
+        ] {
+            assert!(
+                !msg.to_lowercase().contains("click"),
+                "names a click instead of where to go: {msg}"
+            );
+            assert!(
+                msg.contains("Setup"),
+                "should say where to go to fix it: {msg}"
+            );
+        }
     }
 
     #[test]
