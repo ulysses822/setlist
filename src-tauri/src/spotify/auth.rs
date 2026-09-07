@@ -39,6 +39,11 @@ const SCOPES: &str = "user-read-private user-read-email playlist-read-private pl
 /// Exactly what the Web Playback SDK requires, nothing more.
 const STREAMING_SCOPES: &str = "streaming user-read-email user-read-private";
 
+// keyring composes a Windows Credential Manager target as `<user>.<service>`, and the
+// uninstaller has to name those targets as literal strings because NSIS can't read Rust
+// constants (`src-tauri/nsis/hooks.nsh`). A test below holds the two in step: rename one of
+// these without editing the hook and an uninstall silently orphans the credential forever,
+// having just told the user it removed the saved login.
 const KEYRING_SERVICE: &str = "setlist";
 const KEYRING_USER: &str = "spotify-refresh-token";
 const KEYRING_USER_STREAMING: &str = "spotify-streaming-refresh-token";
@@ -640,6 +645,51 @@ mod tests {
             assert!(
                 msg.contains("Setup"),
                 "should say where to go to fix it: {msg}"
+            );
+        }
+    }
+
+    /// The uninstaller clears the Credential Manager entries this module creates, naming them
+    /// as literal strings because NSIS cannot see Rust constants. keyring builds a Windows
+    /// target as `<user>.<service>`, so this reassembles them the same way and checks the hook
+    /// against it — the same trick as the redirect-path test below, for the same reason: the
+    /// failure is silent either way.
+    ///
+    /// Checked in both directions. Forward, so every entry we create is actually deleted, and
+    /// an uninstall that promised to remove the saved login did. Reverse, so the uninstaller
+    /// deletes nothing else — a stale line left behind by a rename would have it removing a
+    /// credential that was never ours from someone's machine.
+    #[test]
+    fn the_uninstaller_deletes_exactly_the_credentials_this_module_creates() {
+        let hooks = include_str!("../../nsis/hooks.nsh");
+        let ours: Vec<String> = [KEYRING_USER, KEYRING_USER_STREAMING]
+            .iter()
+            .map(|user| format!("{user}.{KEYRING_SERVICE}"))
+            .collect();
+
+        // Everything each `cmdkey /delete:` names, up to whatever quote or space ends it.
+        let deleted: Vec<&str> = hooks
+            .match_indices("/delete:")
+            .map(|(at, marker)| {
+                hooks[at + marker.len()..]
+                    .split(['\'', '"', ' ', '\t', '\r', '\n'])
+                    .next()
+                    .unwrap_or_default()
+            })
+            .filter(|target| !target.is_empty())
+            .collect();
+
+        for target in &ours {
+            assert!(
+                deleted.contains(&target.as_str()),
+                "hooks.nsh never deletes {target}, so an uninstall orphans it in Credential Manager"
+            );
+        }
+        for target in &deleted {
+            assert!(
+                ours.iter().any(|ours| ours == target),
+                "hooks.nsh deletes {target}, which this module never creates — the uninstaller \
+                 would be removing someone else's credential"
             );
         }
     }

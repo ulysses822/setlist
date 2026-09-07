@@ -8,7 +8,9 @@
 ;
 ; Both target names are fixed. keyring composes a Windows target as "<user>.<service>" from
 ; the constants in src/spotify/auth.rs: KEYRING_SERVICE ("setlist"), KEYRING_USER and
-; KEYRING_USER_STREAMING. Change those and these must change with them.
+; KEYRING_USER_STREAMING. Change those and these must change with them -- which is not left to
+; this comment: `the_uninstaller_deletes_exactly_the_credentials_this_module_creates` in
+; auth.rs reads this file and fails if the two drift, in either direction.
 ;
 ; Tied to the existing checkbox rather than a second one of its own: adding another control to
 ; the uninstall page needs a forked copy of Tauri's whole installer template, which would then
