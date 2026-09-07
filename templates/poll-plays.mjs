@@ -13,15 +13,18 @@
  * Required env (set as GitHub Actions secrets):
  *   SPOTIFY_CLIENT_ID       - your Spotify app client id
  *   SPOTIFY_REFRESH_TOKEN   - refresh token (scope: user-read-recently-played)
- *   SPOTIFY_CLIENT_SECRET   - required: the app mints a confidential (non-rotating) token,
- *                             which can only be refreshed by presenting the secret
+ *   SPOTIFY_CLIENT_SECRET   - optional, but effectively necessary. With it, the token was
+ *                             minted through the confidential flow and doesn't rotate, so a
+ *                             fixed GitHub secret keeps working. Without it, Spotify rotates
+ *                             the refresh token on every PKCE refresh, and this job has
+ *                             nowhere to write the new one — so the next run fails.
  *
  * This file is a template: Setlist writes it into your data repo as scripts/poll-plays.mjs,
  * which is where the workflow above runs it from.
  *
  * Run locally:  node scripts/poll-plays.mjs   (from your data repo, with the env vars set)
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { appendFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 const HISTORY_FILE = "history/plays.jsonl";
@@ -89,25 +92,36 @@ async function fetchRecent(accessToken) {
   return plays;
 }
 
-function loadExistingKeys() {
-  if (!existsSync(HISTORY_FILE)) return new Set();
+// Every play already logged, plus whether the file ends cleanly — the append below needs to
+// know whether to start with a newline of its own.
+function loadExisting() {
+  if (!existsSync(HISTORY_FILE)) return { keys: new Set(), complete: true };
+  const text = readFileSync(HISTORY_FILE, "utf8");
   const keys = new Set();
-  for (const line of readFileSync(HISTORY_FILE, "utf8").split("\n")) {
+  for (const line of text.split("\n")) {
     if (!line.trim()) continue;
     try {
       const p = JSON.parse(line);
       keys.add(`${p.track_id}|${p.played_at}`);
     } catch {
-      // skip malformed line
+      // A half-written last line from an interrupted append. Skipping it costs at most one
+      // play, and nothing here rewrites the file, so it can't cascade.
     }
   }
-  return keys;
+  return { keys, complete: text === "" || text.endsWith("\n") };
 }
 
 async function main() {
+  if (!process.env.SPOTIFY_CLIENT_SECRET) {
+    console.warn(
+      "SPOTIFY_CLIENT_SECRET is not set. Spotify rotates PKCE refresh tokens on use and this\n" +
+        "job has nowhere to store the new one, so SPOTIFY_REFRESH_TOKEN will be stale by the\n" +
+        "next run. Set the secret and re-mint the token to stop that happening."
+    );
+  }
   const token = await getAccessToken();
   const recent = await fetchRecent(token);
-  const seen = loadExistingKeys();
+  const { keys: seen, complete } = loadExisting();
 
   const fresh = recent
     .filter((p) => !seen.has(`${p.track_id}|${p.played_at}`))
@@ -118,11 +132,13 @@ async function main() {
     return;
   }
 
+  // Append, don't rewrite. The log only grows, so rewriting all of it every 30 minutes puts
+  // the whole history at risk of a mid-write crash — and the risk gets worse the longer you
+  // have been using it. An interrupted append can at worst leave one partial line, which the
+  // reader above already steps over.
   mkdirSync(dirname(HISTORY_FILE), { recursive: true });
-  const existing = existsSync(HISTORY_FILE) ? readFileSync(HISTORY_FILE, "utf8") : "";
-  const prefix = existing && !existing.endsWith("\n") ? "\n" : "";
-  const appended = fresh.map((p) => JSON.stringify(p)).join("\n") + "\n";
-  writeFileSync(HISTORY_FILE, existing + prefix + appended);
+  const prefix = complete ? "" : "\n";
+  appendFileSync(HISTORY_FILE, prefix + fresh.map((p) => JSON.stringify(p)).join("\n") + "\n");
 
   console.log(`Appended ${fresh.length} new play(s).`);
 }
