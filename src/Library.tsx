@@ -161,9 +161,8 @@ export default function Library() {
     blocked,
     confirm: confirmDialog,
     onStatus: setStatus,
-    onPlaylistsChanged: () => {
-      api.listLocalPlaylists().then(setPlaylists).catch(() => {});
-    },
+    // Staged-only change, so skip the data-repo re-read (see loadList).
+    onPlaylistsChanged: () => void loadList(false),
     onLibraryChanged: () => void loadList(),
     onOpening: (file) => {
       setResults([]);
@@ -252,12 +251,18 @@ export default function Library() {
     });
   }
 
-  async function loadList() {
+  /// Re-read the sidebar, reporting a failure rather than leaving a stale list looking
+  /// authoritative — after a create or a delete, a silently stale sidebar is one the user is
+  /// about to act on.
+  ///
+  /// `alsoGit` re-reads the data-repo chip too, which costs a `git status` subprocess. Worth it
+  /// whenever a playlist file changed; wasted when only a staged draft did, since staging
+  /// writes to the gitignored `staged/` directory and leaves the repo untouched.
+  async function loadList(alsoGit = true) {
     setListBusy(true);
     try {
       setPlaylists(await api.listLocalPlaylists());
-      // Keep the data-repo chip live after any change that may have written files.
-      git?.refresh();
+      if (alsoGit) git?.refresh();
     } catch (e) {
       setStatus({ kind: "err", msg: String(e) });
     } finally {
