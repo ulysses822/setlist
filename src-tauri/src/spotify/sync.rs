@@ -840,6 +840,13 @@ pub async fn refresh_playlist(
     file: String,
 ) -> Result<PlaylistAt, String> {
     let pf = read_local(data_dir.clone(), file.clone())?;
+    // A locally-created playlist has no Spotify id, so there is no remote copy to re-pull.
+    // Every sibling of this function (follow, delete, push, sync-status) already says so;
+    // without the guard this one alone asked Spotify for `/playlists/` and reported whatever
+    // 40x came back, which reads like a broken app rather than an inapplicable action.
+    if pf.spotify_id.is_empty() {
+        return Err("This playlist isn't on Spotify yet — push it first.".into());
+    }
     let updated = fetch_one(state, &client_id, &pf.spotify_id).await?;
     let file = write_playlist(&data_dir, &file, &updated)?;
     Ok(PlaylistAt { file, playlist: updated })
