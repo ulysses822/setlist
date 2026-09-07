@@ -120,7 +120,7 @@ function App() {
   }, [status]);
 
   useEffect(() => {
-    (async () => {
+    void (async () => {
       try {
         const cfg = await api.getConfig();
         setClientId(cfg.client_id);

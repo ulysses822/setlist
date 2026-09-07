@@ -118,12 +118,14 @@ npm run build     # tsc (strict) + vite build
 npm test          # both suites, below
 npm run test:web  # vitest — the push diff, the cleanup linter, the feature maths
 npm run test:rust # the Rust suite — sync/push planner, staging, renames, git
-npm run lint      # cargo fmt --check, then clippy with warnings denied
+npm run lint      # both linters, below
+npm run lint:web  # eslint
+npm run lint:rust # cargo fmt --check, then clippy with warnings denied
 ```
 
 The Rust half is Windows-only (see [Platform support](#platform-support)), so `npm test`,
-`npm run test:rust` and `npm run lint` won't build elsewhere. `npm run build` and
-`npm run test:web` work anywhere.
+`npm run test:rust`, `npm run lint` and `npm run lint:rust` won't build elsewhere.
+`npm run build`, `npm run test:web` and `npm run lint:web` work anywhere.
 
 Please add a test with a behaviour change — the suites are where the invariants are written
 down, and they're the only thing standing between a refactor and someone's real playlists. The

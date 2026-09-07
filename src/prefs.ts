@@ -45,7 +45,7 @@ export async function loadPrefs(): Promise<void> {
   try {
     const [g, u] = await Promise.all([api.getGoals(), api.getUiState()]);
     goals = (g ?? {}) as Goals;
-    ui = (u ?? {}) as UiState;
+    ui = u ?? {};
     loaded = true;
     // A different data folder (or a retry of the same one) gets a clean verdict — the previous
     // folder's failure says nothing about this one.

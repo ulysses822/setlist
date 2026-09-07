@@ -685,7 +685,7 @@ export default function Library() {
     // bottom, regardless of direction, so the sorted block is the songs we actually know.
     const valueOf = (t: TrackEntry): number | null => {
       const f = featureOf(t);
-      return f ? (f[sortKey] as number) : null;
+      return f ? f[sortKey] : null;
     };
     return [...arr].sort((a, b) => {
       const av = valueOf(a.t);
@@ -852,7 +852,7 @@ export default function Library() {
     if (!draft) return;
     const ctx = `spotify:playlist:${draft.spotify_id}`;
     if (playable(t)) {
-      player?.play(ctx, t.id);
+      void player?.play(ctx, t.id);
       return;
     }
     const from = draft.tracks.findIndex((x) => x.id === t.id);
@@ -861,7 +861,7 @@ export default function Library() {
       setStatus({ kind: "err", msg: "No playable track from here — the rest are unavailable on Spotify." });
       return;
     }
-    player?.play(ctx, next.id);
+    void player?.play(ctx, next.id);
   }
 
   // One row renderer for both modes. In normal mode (status "normal") it's the editable row
@@ -1309,7 +1309,7 @@ export default function Library() {
                           className="kebab-item"
                           onClick={() => {
                             setMenuOpen(false);
-                            toggleArchive(selected!, currentArchived);
+                            void toggleArchive(selected!, currentArchived);
                           }}
                         >
                           {currentArchived ? "Unarchive" : "Archive"}
@@ -1320,7 +1320,7 @@ export default function Library() {
                             disabled={blocked}
                             onClick={() => {
                               setMenuOpen(false);
-                              refollow(selected!);
+                              void refollow(selected!);
                             }}
                           >
                             Re-add to Spotify

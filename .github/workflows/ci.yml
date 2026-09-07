@@ -39,6 +39,13 @@ jobs:
       # can no longer reach a tag unnoticed.
       - run: npm run build
 
+      # The other half of what `npm run lint` means. The Rust job below has had fmt + clippy
+      # gated since early on; this is the same idea for the frontend, and it catches what tsc
+      # doesn't: an unawaited promise, a dead type assertion, a hook rule broken. Errors fail
+      # the job; the react-hooks/exhaustive-deps warnings are a review list, not a gate (see
+      # the reasoning in eslint.config.js).
+      - run: npm run lint:web
+
       # The pure-logic modules — the push diff, the cleanup linter, the feature maths. They run
       # here rather than in the Windows job because they need no Tauri IPC and no keyring, so
       # there is no reason to make anyone wait on a cold Rust build for their verdict.

@@ -39,7 +39,7 @@ export function RateLimitProvider({ children }: { children: ReactNode }) {
     refresh(); // pick up a cooldown that predates this window (e.g. after a reload)
     const unlisten = listen<number>("rate-limit-cooldown", (e) => setSecondsLeft(e.payload));
     return () => {
-      unlisten.then((f) => f());
+      void unlisten.then((f) => f());
     };
   }, []);
 

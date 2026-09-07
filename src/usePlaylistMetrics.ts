@@ -172,7 +172,7 @@ export function usePlaylistMetrics(
       // Seed from the current averages so you adjust from where the playlist already sits.
       const seed = {} as Goal;
       for (const k of GOAL_DIMS) {
-        const v = aggregates ? (aggregates[`avg_${k}` as keyof Aggregates] as number | null) : null;
+        const v = aggregates ? aggregates[`avg_${k}` as keyof Aggregates] : null;
         seed[k] = v ?? 0.5;
       }
       updateGoal(seed);

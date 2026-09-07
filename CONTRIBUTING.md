@@ -33,12 +33,12 @@ Run what CI runs:
 ```bash
 npm run build   # tsc (strict) + vite build
 npm test        # both suites (vitest, then the Rust one)
-npm run lint    # clippy, warnings denied
+npm run lint    # eslint, then clippy with warnings denied
 ```
 
 All three are green on `main` and CI blocks a merge if any of them isn't. On macOS or Linux
-the Rust half won't build, so run `npm run test:web` and `npm run build` and leave the rest
-to CI.
+the Rust half won't build, so run `npm run build`, `npm run test:web` and `npm run lint:web`
+and leave the rest to CI.
 
 **Add a test with a behaviour change.** Both suites are where the invariants are written down,
 and they're the only thing between a refactor and someone's real playlists.
@@ -56,7 +56,19 @@ PR in its own right.
 ## Style
 
 Rust is `cargo fmt` with the default settings, checked in CI. TypeScript has no formatter
-configured — match the file you're editing. Tests read as sentences in both languages
+configured — match the file you're editing.
+
+TypeScript is linted with `eslint .` (`npm run lint:web`), gated in CI. The rule set is
+deliberately narrow, and [eslint.config.js](eslint.config.js) says why for each choice: the
+type-aware rules that catch mistakes are on, the `no-unsafe-*` family that would demand
+annotations on everything crossing the Tauri boundary is off, and the React Compiler rules
+that ship with `eslint-plugin-react-hooks` are off because this app isn't built with the
+compiler and holds several of those patterns on purpose.
+
+`react-hooks/exhaustive-deps` is a warning rather than an error. There are nine of them today,
+and each is a real question about whether a memo can serve a stale result — but the answer is
+behavioural, so closing one means running the app, not just satisfying the linter. If you fix
+one, say in the PR what you clicked. Tests read as sentences in both languages
 (`fn a_renamed_playlist_takes_its_file_and_its_saved_state_with_it`, `it("marks only the song
 that moved, not everything after it")`); a name that says what should be true is worth more
 than a comment explaining what the assertion means.

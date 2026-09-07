@@ -135,7 +135,7 @@ export default function StaleView({
           <p className="hint">
             {noLog
               ? "Find songs you don't listen to anymore."
-              : `Logging since ${since} · ${history!.total_plays} plays. “Never” means not played since then.`}
+              : `Logging since ${since} · ${history.total_plays} plays. “Never” means not played since then.`}
           </p>
         </div>
         <button className="btn ghost" onClick={onClose}>

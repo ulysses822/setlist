@@ -73,7 +73,7 @@ export function fmtFeature(f: Features | undefined, key: FeatureKey): string {
   if (!f) return "";
   return key === "tempo"
     ? String(Math.round(f.tempo))
-    : `${Math.round((f[key] as number) * 100)}%`;
+    : `${Math.round(f[key] * 100)}%`;
 }
 
 const OUTLIER_Z = 2; // flag tracks >2 std devs from the playlist mean on some dimension
@@ -201,7 +201,7 @@ export function computeOutliers(
 
   const stats: Record<string, { mean: number; std: number }> = {};
   for (const k of FEATURE_KEYS) {
-    const vals = withF.map((f) => f[k] as number);
+    const vals = withF.map((f) => f[k]);
     const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
     const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length;
     stats[k] = { mean, std: Math.sqrt(variance) };
@@ -215,7 +215,7 @@ export function computeOutliers(
       const { mean, std } = stats[k];
       const floor = k === "tempo" ? 4 : 0.04; // ignore dimensions with negligible spread
       if (std < floor) continue;
-      const z = ((f[k] as number) - mean) / std;
+      const z = (f[k] - mean) / std;
       if (!best || Math.abs(z) > Math.abs(best.z)) {
         best = { feature: k, dir: z > 0 ? "up" : "down", z, method: "independent" };
       }
@@ -290,7 +290,7 @@ export function computeOutliersMulti(
   const active: FeatureKey[] = [];
   const means: number[] = [];
   for (const k of FEATURE_KEYS) {
-    const vals = withF.map((f) => f[k] as number);
+    const vals = withF.map((f) => f[k]);
     const mean = vals.reduce((a, b) => a + b, 0) / n;
     const variance = vals.reduce((a, b) => a + (b - mean) ** 2, 0) / n;
     const floor = k === "tempo" ? 4 : 0.04;
@@ -306,9 +306,9 @@ export function computeOutliersMulti(
   const cov: number[][] = Array.from({ length: d }, () => new Array(d).fill(0));
   for (const f of withF) {
     for (let i = 0; i < d; i++) {
-      const di = (f[active[i]] as number) - means[i];
+      const di = f[active[i]] - means[i];
       for (let j = 0; j <= i; j++) {
-        cov[i][j] += di * ((f[active[j]] as number) - means[j]);
+        cov[i][j] += di * (f[active[j]] - means[j]);
       }
     }
   }
@@ -338,7 +338,7 @@ export function computeOutliersMulti(
   for (const t of tracks) {
     const f = feat(t);
     if (!f) continue;
-    const dev = active.map((k, i) => (f[k] as number) - means[i]);
+    const dev = active.map((k, i) => f[k] - means[i]);
     const y = choleskySolve(l, dev);
     const d2 = dev.reduce((acc, v, i) => acc + v * y[i], 0);
     if (d2 < cutoff) continue;
@@ -346,9 +346,12 @@ export function computeOutliersMulti(
     // Decompose D² into per-dimension contributions (devᵢ·(Σ⁻¹dev)ᵢ sums to D²); the
     // meaningfully-positive ones explain the flag.
     const contributors: Contributor[] = active
-      .map((k, i) => ({
-        feature: k as string,
-        dir: (dev[i] > 0 ? "up" : "down") as "up" | "down",
+      // Annotated rather than asserted: inside an object literal the ternary would otherwise
+      // widen to `string`, and the `as "up" | "down"` that used to fix that reads as
+      // redundant to anything looking at the ternary alone.
+      .map((k, i): Contributor => ({
+        feature: k,
+        dir: dev[i] > 0 ? "up" : "down",
         share: (dev[i] * y[i]) / d2,
       }))
       .filter((c) => c.share > 0.1)
@@ -416,7 +419,7 @@ export function computeGoalDeviations(
     if (!f) continue;
     const offs: GoalDeviation[] = [];
     for (const k of GOAL_DIMS) {
-      const diff = (f[k] as number) - goal[k];
+      const diff = f[k] - goal[k];
       if (Math.abs(diff) >= threshold) {
         offs.push({ feature: k, dir: diff > 0 ? "up" : "down", diff });
       }
@@ -449,7 +452,7 @@ export function playlistVector(agg: Aggregates): number[] | null {
     agg.avg_liveness,
     agg.avg_tempo,
   ];
-  return v.every((x) => x != null) ? (v as number[]) : null;
+  return v.every((x) => x != null) ? v : null;
 }
 
 /// One feature's contribution to a principal axis (the standardized-space loading). The view
@@ -606,7 +609,7 @@ export function fitPca(rows: number[][]): PcaBasis | null {
 
   const loadings = (vec: number[]): AxisLoading[] =>
     kept
-      .map((j, i) => ({ feature: FEATURE_KEYS[j] as string, weight: vec[i] }))
+      .map((j, i) => ({ feature: FEATURE_KEYS[j], weight: vec[i] }))
       .sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight));
 
   // Project the fit set once to fix the canvas-normalization bounds for the frozen map.
