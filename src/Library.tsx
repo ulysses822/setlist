@@ -198,6 +198,7 @@ export default function Library() {
     revert,
     pullRemote,
     flush,
+    openPlaylist,
   } = draftApi;
 
   const metrics = usePlaylistMetrics(selected, draft?.tracks ?? null);
@@ -280,7 +281,7 @@ export default function Library() {
       const np = await api.createPlaylist(name.trim(), description.trim());
       setCreateOpen(false);
       await loadList();
-      void open(np.file);
+      void openPlaylist(np.file);
       setStatus({ kind: "ok", msg: `Created "${np.name}"` });
     } catch (e) {
       setStatus({ kind: "err", msg: String(e) });
@@ -763,7 +764,7 @@ export default function Library() {
         className={`pl-item ${selected === p.file ? "active" : ""} ${
           isDropTarget ? "drop-target" : ""
         }`}
-        onClick={() => open(p.file)}
+        onClick={() => openPlaylist(p.file)}
         onDragOver={(e) => {
           // Only react to a track being dragged in (not playlist-internal reorder).
           if (!e.dataTransfer.types.includes(TRACK_MIME) || p.file === selected) return;
@@ -1122,7 +1123,7 @@ export default function Library() {
                   className="hit-item"
                   onClick={() => {
                     setMode("playlists");
-                    void open(h.file, h.id);
+                    void openPlaylist(h.file, h.id);
                   }}
                 >
                   <span className="hit-title">{h.title}</span>
@@ -1192,8 +1193,8 @@ export default function Library() {
             busy={overlayBusy}
             archived={archivedFiles}
             onClose={() => setOverlay(null)}
-            onOpenPlaylist={(file) => void open(file)}
-            onOpenTrack={(file, trackId) => void open(file, trackId)}
+            onOpenPlaylist={(file) => void openPlaylist(file)}
+            onOpenTrack={(file, trackId) => void openPlaylist(file, trackId)}
             onNormalize={(group, keepId) => void normalizeCrossDup(group, keepId)}
             onError={(msg) => setStatus({ kind: "err", msg })}
           />

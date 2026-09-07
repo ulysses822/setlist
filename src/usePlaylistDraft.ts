@@ -78,7 +78,12 @@ export interface PlaylistDraft {
   showDiff: boolean;
   setShowDiff: Dispatch<SetStateAction<boolean>>;
 
-  open: (file: string, focusTrackId?: string) => Promise<void>;
+  /// Named `openPlaylist`, not `open`, and it has to stay that way. Library destructures
+  /// this interface into bare names; `open` collides with `window.open`, whose signature
+  /// `(url?: string, target?: string)` happily accepts `open(file, trackId)`. Leave it off the
+  /// destructuring list and every call site type-checks, builds, and opens a popup instead of
+  /// a playlist — which is exactly what shipped once.
+  openPlaylist: (file: string, focusTrackId?: string) => Promise<void>;
   /// Replace the local copy with Spotify's, discarding local edits (asks first).
   pullRemote: () => Promise<void>;
   /// Drop unsaved edits and reload the last saved version (asks first).
@@ -156,7 +161,7 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
     await prefs.loadPrefs();
   }
 
-  async function open(file: string, focusTrackId?: string) {
+  async function openPlaylist(file: string, focusTrackId?: string) {
     // Auto-stage any in-memory edits to the current playlist before (re)loading. Staged
     // edits persist on disk and reload when reopened, so nothing is silently lost. This
     // must also run when re-clicking the playlist that's already open — otherwise the
@@ -288,7 +293,7 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
       api
         .clearStaged(selected)
         .then(() => onPlaylistsChanged()) // refresh the sidebar's modified dot
-        .catch(() => {}); // a leftover equal-to-mirror staged file is harmless; open() also cleans it
+        .catch(() => {}); // a leftover equal-to-mirror staged file is harmless; openPlaylist() cleans it too
     }
     setDirty(key !== persistedRef.current);
   }
@@ -480,7 +485,7 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
     },
     showDiff,
     setShowDiff,
-    open,
+    openPlaylist,
     pullRemote,
     revert,
     save,
