@@ -39,6 +39,14 @@ jobs:
       # can no longer reach a tag unnoticed.
       - run: npm run build
 
+      # The two standalone scripts are dependency-free Node ESM, deliberately outside the
+      # TypeScript build (they must run with bare `node`, one of them in a job holding Spotify
+      # secrets). Nothing else would notice a syntax error in either until someone ran it.
+      - name: Syntax-check the standalone scripts
+        run: |
+          node --check scripts/get-refresh-token.mjs
+          node --check templates/poll-plays.mjs
+
   rust:
     # Windows is not a preference here. src-tauri/src/spotify/auth.rs carries a `compile_error!`
     # for every non-Windows target (without keyring's windows-native backend the refresh token

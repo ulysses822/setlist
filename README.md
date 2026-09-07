@@ -140,8 +140,12 @@ its CI secrets out of the app's code repo. Open **Setup → Listening-history lo
    it from there. (The client secret matters: refreshes authenticated with it don't rotate
    the token, so the secret never goes stale.)
 
-Prefer the terminal? `npx -y tsx scripts/get-refresh-token.ts <client_id> <client_secret>`
-mints the token, and `.env.example` shows how to run `templates/poll-plays.mjs` locally.
+Prefer the terminal — or on macOS/Linux, where the app itself doesn't build but the data
+repo's workflow runs fine? `node scripts/get-refresh-token.mjs <client_id>` mints the same
+token. It prompts for the client secret with the input hidden rather than taking it as an
+argument, since command lines land in your shell history and are visible to other processes;
+set `SPOTIFY_CLIENT_SECRET` in the environment instead if you're scripting it.
+`.env.example` shows how to run `templates/poll-plays.mjs` locally.
 
 ## Your data, your rules
 
@@ -229,4 +233,4 @@ audio-feature data it fetches at runtime belongs to Spotify and
 | `src/` | React + TypeScript UI (library, editor, metrics, player) |
 | `src-tauri/src/` | Rust core: Spotify client, OAuth, file I/O, sync engine |
 | `templates/poll-plays.{mjs,yml}` | History logger scaffolded into your data repo (script + 30-min cron) |
-| `scripts/get-refresh-token.ts` | One-time scoped-token mint (CLI) |
+| `scripts/get-refresh-token.mjs` | One-time scoped-token mint (CLI, dependency-free) |
