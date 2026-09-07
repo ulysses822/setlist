@@ -6,7 +6,24 @@
 // so there is no second implementation to keep in step. Outliers are keyed by track id
 // rather than array index, so they survive a reorder.
 
-import type { Aggregates, Features, TrackEntry } from "./api";
+import type { Features, TrackEntry } from "./api";
+
+/// One playlist's rolled-up feature numbers. Defined here rather than in api.ts because no
+/// Tauri command returns it — the backend fetches per-track features and stops; every average
+/// below is computed in this file.
+export interface Aggregates {
+  total: number;
+  analyzed: number;
+  total_duration_ms: number;
+  avg_valence: number | null;
+  avg_energy: number | null;
+  avg_danceability: number | null;
+  avg_acousticness: number | null;
+  avg_instrumentalness: number | null;
+  avg_liveness: number | null;
+  avg_speechiness: number | null;
+  avg_tempo: number | null;
+}
 
 // Dimensions used for outlier detection. tempo is included (z-scored, so its BPM
 // scale doesn't matter); key/mode/loudness are excluded as not mood-comparable.

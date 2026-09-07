@@ -13,11 +13,12 @@
 // metrics on every click. Only the view choices reset, via `resetFor`.
 
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
-import { api, type Aggregates, type Features, type TrackEntry } from "./api";
+import { api, type Features, type TrackEntry } from "./api";
 import type { GoalControl } from "./MetricsPanel";
 import {
   bareId,
   computeAggregates,
+  type Aggregates,
   computeGoalDeviations,
   computeOutliersByMode,
   FEATURE_META,

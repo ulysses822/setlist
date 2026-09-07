@@ -115,20 +115,6 @@ export interface Features {
   mode: number;
 }
 
-export interface Aggregates {
-  total: number;
-  analyzed: number;
-  total_duration_ms: number;
-  avg_valence: number | null;
-  avg_energy: number | null;
-  avg_danceability: number | null;
-  avg_acousticness: number | null;
-  avg_instrumentalness: number | null;
-  avg_liveness: number | null;
-  avg_speechiness: number | null;
-  avg_tempo: number | null;
-}
-
 export interface TrackLite {
   id: string;
   title: string;

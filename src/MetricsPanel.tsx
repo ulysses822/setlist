@@ -3,7 +3,7 @@
 // the radar. Off-goal tracks are flagged in the track list (see Library).
 
 import { useRef } from "react";
-import type { Aggregates } from "./api";
+import type { Aggregates } from "./metricsCalc";
 import { MIN_FOR_MULTI, type Goal, type GoalDim, type OutlierMode } from "./metricsCalc";
 
 export function pct(v: number | null): string {
