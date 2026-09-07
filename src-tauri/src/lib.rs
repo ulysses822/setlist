@@ -10,11 +10,10 @@ use spotify::{
     PushResult, SearchResult, SyncStatus, TrackEntry,
 };
 
-/// Load config and require a non-empty Spotify client id. Almost every Spotify-touching command
-/// needs one, so the "connect first" invariant lives here in exactly one place rather than being
-/// re-checked at each call site. Returns the trimmed id.
-fn require_client_id(app: &tauri::AppHandle) -> Result<String, String> {
-    let cfg = config::load(app)?;
+/// The "connect first" invariant, stated once. Almost every Spotify-touching command needs a
+/// client id, and both accessors below go through here so the check and its wording cannot
+/// drift apart. Returns the trimmed id.
+fn client_id_of(cfg: &AppConfig) -> Result<String, String> {
     let id = cfg.client_id.trim();
     if id.is_empty() {
         return Err("Set your Spotify Client ID first.".into());
@@ -22,17 +21,20 @@ fn require_client_id(app: &tauri::AppHandle) -> Result<String, String> {
     Ok(id.to_string())
 }
 
+/// Load config and require a non-empty Spotify client id.
+fn require_client_id(app: &tauri::AppHandle) -> Result<String, String> {
+    client_id_of(&config::load(app)?)
+}
+
 /// The client id (required) plus the resolved data dir — the shared preamble for commands that
-/// both call Spotify and read/write the data folder.
+/// both call Spotify and read/write the data folder. One config load serves both, and the id is
+/// checked before the data dir so an unconnected app says so rather than complaining about a
+/// folder the user has not reached yet.
 fn require_client_id_and_data_dir(
     app: &tauri::AppHandle,
 ) -> Result<(String, std::path::PathBuf), String> {
     let cfg = config::load(app)?;
-    let id = cfg.client_id.trim();
-    if id.is_empty() {
-        return Err("Set your Spotify Client ID first.".into());
-    }
-    Ok((id.to_string(), config::resolve_data_dir(&cfg)?))
+    Ok((client_id_of(&cfg)?, config::resolve_data_dir(&cfg)?))
 }
 
 // Commands marked `(async)` run on the async runtime instead of the main thread. Without it,
