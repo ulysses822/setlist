@@ -32,22 +32,34 @@ Run what CI runs:
 
 ```bash
 npm run build   # tsc (strict) + vite build
-npm test        # the Rust suite
+npm test        # both suites (vitest, then the Rust one)
 npm run lint    # clippy, warnings denied
 ```
 
-All three are green on `main` and CI blocks a merge if any of them isn't.
+All three are green on `main` and CI blocks a merge if any of them isn't. On macOS or Linux
+the Rust half won't build, so run `npm run test:web` and `npm run build` and leave the rest
+to CI.
 
-**Add a test with a behaviour change.** The Rust suite is where the sync engine's invariants
-are written down — what a push does when the remote has moved, how a renamed playlist is
-recognised, what happens to a staged edit that turns out to match the mirror. It's the only
-thing between a refactor and someone's real playlists. There is no frontend test runner yet;
-if you add one, that's a PR in its own right.
+**Add a test with a behaviour change.** Both suites are where the invariants are written down,
+and they're the only thing between a refactor and someone's real playlists.
+
+The Rust suite (`npm run test:rust`) covers what a push does when the remote has moved, how a
+renamed playlist is recognised, what happens to a staged edit that turns out to match the
+mirror — plus the token families and the credential names the uninstaller deletes.
+
+The vitest suite (`npm run test:web`) covers the pure logic behind the editor: the diff you
+review before pushing, the cleanup linter's duplicate and availability checks, and the feature
+maths. It is `src/*.test.ts` next to the module under test, node environment, no jsdom — these
+are functions, not components. Rendering is untested, and a component-testing setup would be a
+PR in its own right.
 
 ## Style
 
 Rust is `cargo fmt` with the default settings, checked in CI. TypeScript has no formatter
-configured — match the file you're editing.
+configured — match the file you're editing. Tests read as sentences in both languages
+(`fn a_renamed_playlist_takes_its_file_and_its_saved_state_with_it`, `it("marks only the song
+that moved, not everything after it")`); a name that says what should be true is worth more
+than a comment explaining what the assertion means.
 
 Comments here explain **why**, not what. If a line looks odd, the odd part is what the comment
 is for. If it doesn't look odd, it probably doesn't need one.

@@ -39,6 +39,11 @@ jobs:
       # can no longer reach a tag unnoticed.
       - run: npm run build
 
+      # The pure-logic modules — the push diff, the cleanup linter, the feature maths. They run
+      # here rather than in the Windows job because they need no Tauri IPC and no keyring, so
+      # there is no reason to make anyone wait on a cold Rust build for their verdict.
+      - run: npm run test:web
+
       # The two standalone scripts are dependency-free Node ESM, deliberately outside the
       # TypeScript build (they must run with bare `node`, one of them in a job holding Spotify
       # secrets). Nothing else would notice a syntax error in either until someone ran it.

@@ -114,16 +114,21 @@ These are exactly what CI runs on every push and pull request
 run there:
 
 ```bash
-npm run build   # tsc (strict) + vite build
-npm test        # the Rust suite — sync/push planner, staging, renames, git
-npm run lint    # cargo fmt --check, then clippy with warnings denied
+npm run build     # tsc (strict) + vite build
+npm test          # both suites, below
+npm run test:web  # vitest — the push diff, the cleanup linter, the feature maths
+npm run test:rust # the Rust suite — sync/push planner, staging, renames, git
+npm run lint      # cargo fmt --check, then clippy with warnings denied
 ```
 
-The Rust half is Windows-only (see [Platform support](#platform-support)), so `npm test` and
-`npm run lint` won't build elsewhere. `npm run build` works anywhere.
+The Rust half is Windows-only (see [Platform support](#platform-support)), so `npm test`,
+`npm run test:rust` and `npm run lint` won't build elsewhere. `npm run build` and
+`npm run test:web` work anywhere.
 
-Please add a test with a behaviour change — the suite is where the sync engine's invariants are
-written down, and it's the only thing standing between a refactor and someone's real playlists.
+Please add a test with a behaviour change — the suites are where the invariants are written
+down, and they're the only thing standing between a refactor and someone's real playlists. The
+split follows where the logic lives: anything that talks to Spotify, the keyring or git is
+Rust, and the maths behind the editor is TypeScript.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the rest: what a PR wants to look like, the commit
 convention, and why the Windows-only build isn't a bug to be fixed in passing.
