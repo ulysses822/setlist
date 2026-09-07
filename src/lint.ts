@@ -4,6 +4,11 @@
 //                         re-upload), i.e. same ISRC but different track ids
 // Pure functions over a track list so the per-playlist chip (live on the draft) and the
 // library-wide scan share one source of truth.
+//
+// One identity rule for the whole file: two entries are the same track when their `bareId`
+// matches. Nothing here keys on the full `spotify:track:…` uri. They agree today — stored ids
+// always come back from the API in the same form — so mixing them broke nothing and would
+// have gone on not breaking anything right up until it silently did.
 
 import type { TrackEntry } from "./api";
 import { bareId } from "./metricsCalc";
@@ -88,7 +93,7 @@ export function issueCount(lint: PlaylistLint): number {
 // single id even though the variants live in separate playlists.
 
 export interface CrossVariant {
-  id: string; // full track id (spotify:track:…)
+  id: string; // bare track id, per the identity rule at the top of this file
   track: TrackEntry; // a representative entry, used when normalizing
   locations: { file: string; name: string; count: number }[];
 }
@@ -103,7 +108,7 @@ export interface CrossDupGroup {
 export function crossPlaylistIsrcDuplicates(
   playlists: { file: string; name: string; tracks: TrackEntry[] }[]
 ): CrossDupGroup[] {
-  // isrc -> (track id -> variant accumulator)
+  // isrc -> (bare track id -> variant accumulator)
   const byIsrc = new Map<
     string,
     Map<string, { track: TrackEntry; locations: Map<string, { name: string; count: number }> }>
@@ -117,10 +122,13 @@ export function crossPlaylistIsrcDuplicates(
         variants = new Map();
         byIsrc.set(code, variants);
       }
-      let v = variants.get(t.id);
+      // Keyed bare, but the representative keeps the entry whole: normalizing rewrites the
+      // other variants to this track, and that needs its real uri.
+      const id = bareId(t.id);
+      let v = variants.get(id);
       if (!v) {
         v = { track: t, locations: new Map() };
-        variants.set(t.id, v);
+        variants.set(id, v);
       }
       const loc = v.locations.get(pl.file);
       if (loc) loc.count++;

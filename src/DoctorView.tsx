@@ -11,7 +11,6 @@ import {
   lintPlaylist,
   type CrossDupGroup,
 } from "./lint";
-import { bareId } from "./metricsCalc";
 
 export default function DoctorView({
   data,
@@ -77,7 +76,7 @@ export default function DoctorView({
                             <span className="cv-where">
                               in {v.locations.map((l) => l.name).join(", ")}
                             </span>
-                            <span className="cv-id">{bareId(v.id)}</span>
+                            <span className="cv-id">{v.id}</span>
                           </div>
                           <button
                             className="btn ghost small"

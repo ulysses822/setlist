@@ -489,9 +489,11 @@ export default function Library() {
     try {
       let changed = 0;
       for (const pl of scanned) {
-        if (!pl.tracks.some((t) => removeIds.has(t.id))) continue;
+        if (!pl.tracks.some((t) => removeIds.has(bareId(t.id)))) continue;
         const replaced = pl.tracks.map((t) =>
-          removeIds.has(t.id) ? { ...keep.track, added_at: t.added_at, added_by: t.added_by } : t
+          removeIds.has(bareId(t.id))
+            ? { ...keep.track, added_at: t.added_at, added_by: t.added_by }
+            : t
         );
         const deduped = removeExactDuplicates(replaced);
         const staged = await api.getStaged(pl.file);
