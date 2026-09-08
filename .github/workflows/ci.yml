@@ -32,6 +32,11 @@ jobs:
 
       # --ignore-scripts matches audit.yml and release.yml — install hooks are the
       # highest-leverage npm supply-chain vector and nothing here needs them.
+      #
+      # No setup-node, deliberately (see release.yml), so this runs on whatever Node the
+      # runner image ships that week. `engine-strict` in .npmrc is what stops that drifting
+      # somewhere the toolchain doesn't support: the install fails here, loudly, instead of
+      # a test failing later for a reason nothing names.
       - run: npm ci --ignore-scripts
 
       # `npm run build` is `tsc && vite build`. tsc runs under strict + noUnusedLocals +

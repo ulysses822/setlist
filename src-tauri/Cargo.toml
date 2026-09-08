@@ -6,6 +6,10 @@ authors = ["ulysses822"]
 license = "GPL-3.0-only"
 repository = "https://github.com/ulysses822/setlist"
 edition = "2021"
+# The graph's real floor, not a guess: darling, plist, serde_with and time all declare 1.88.
+# Cargo refuses the build with a clear message below this, instead of failing inside a
+# dependency on syntax the toolchain does not know.
+rust-version = "1.88"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

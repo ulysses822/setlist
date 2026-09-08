@@ -10,6 +10,10 @@
     "url": "git+https://github.com/ulysses822/setlist.git"
   },
   "type": "module",
+  "//engines": "Not a round number: it is the intersection of vitest 5, eslint 10 and vite 7, which between them rule out Node 20, 23 and 25. Don't widen it without rechecking all three. engine-strict in .npmrc makes it a refusal to install.",
+  "engines": {
+    "node": "^22.13.0 || ^24.0.0 || >=26.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

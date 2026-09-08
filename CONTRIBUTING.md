@@ -25,6 +25,11 @@ npm install
 npm run tauri dev
 ```
 
+Node 22.13+ or 24, and Rust 1.88+. Both are recorded where the tools check them (`engines` in
+`package.json` with `engine-strict` set, `rust-version` in `src-tauri/Cargo.toml`), so a
+version that won't work is refused at install rather than failing obscurely later. Node 23 and
+25 are excluded by vitest, which is why the range looks the way it does.
+
 You need your own Spotify app for a client ID — [Download](README.md#download) in the README
 walks through it. Tauri's own prerequisites (Rust, MSVC build tools) are at
 <https://tauri.app/start/prerequisites/>.

@@ -136,8 +136,16 @@ to register, and buttons to connect and pull playlists.](docs/screenshots/setup.
 
 ## Build from source
 
-You need **Node.js**, **Rust** (<https://rustup.rs>), and the MSVC C++ build tools
-(WebView2 ships with Windows 11). Details: <https://tauri.app/start/prerequisites/>.
+You need **Node.js 22.13+ or 24** (23 and 25 won't do — see below), **Rust 1.88+**
+(<https://rustup.rs>), and the MSVC C++ build tools (WebView2 ships with Windows 11).
+Details: <https://tauri.app/start/prerequisites/>.
+
+Both floors are recorded where the tools will actually check them — `engines` in
+`package.json`, enforced by `engine-strict` in `.npmrc`, and `rust-version` in
+`src-tauri/Cargo.toml` — so a version that won't work is refused at install time rather than
+failing obscurely later. The odd-looking Node range is the intersection of what the toolchain
+requires, not a preference: vitest 5 takes `^22.12 || ^24 || >=26` and eslint 10 takes
+`^20.19 || ^22.13 || >=24`, which between them rule out 20, 23 and 25.
 
 ```bash
 npm install
