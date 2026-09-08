@@ -13,12 +13,9 @@ import { usePlaylistDraft, type Status } from "./usePlaylistDraft";
 import { usePlaylistLibrary } from "./usePlaylistLibrary";
 import {
   bareId,
-  FEATURE_LABEL,
   FEATURE_META,
-  fmtFeature,
   isLocalTrack,
   type FeatureKey,
-  type GoalDeviation,
 } from "./metricsCalc";
 import {
   issueCount,
@@ -42,7 +39,8 @@ import {
 } from "./modals";
 import { useNowPlaying } from "./player";
 import { useGit } from "./git";
-import { diffTracks, type DiffStatus } from "./playlistDiff";
+import { diffTracks } from "./playlistDiff";
+import TrackRow, { TRACK_MIME, type RowStatus } from "./TrackRow";
 import { useRateLimit } from "./rateLimit";
 
 type SidebarMode = "playlists" | "songs";
@@ -470,7 +468,6 @@ export default function Library() {
   // Copy a track (dragged from the open editor) into another playlist's staged edits.
   // The target isn't open in the editor, so we read its effective tracks (staged ?? canonical),
   // append, and re-stage — no Spotify call, no change to the open playlist.
-  const TRACK_MIME = "application/x-setlist-track";
   async function copyTrackToPlaylist(track: TrackEntry, target: LocalPlaylist) {
     if (target.file === selected) return; // dropping back on the open playlist: no-op
     try {
@@ -780,200 +777,51 @@ export default function Library() {
     void player?.play(ctx, next.id);
   }
 
-  // One row renderer for both modes. In normal mode (status "normal") it's the editable row
-  // with drag + remove; in diff mode it's read-only with add/remove/move styling. Every
-  // branch keeps the same grid cells so columns stay aligned.
-  function trackRow(
+  // Wire one track into a row. The derivations stay here because they read this component's
+  // metrics, playback and drag state; `TrackRow` is handed plain values and holds none of it.
+  function renderRow(
     t: TrackEntry,
-    opts: { key: string; status: DiffStatus | "normal"; position: number | null; draftIndex?: number }
+    opts: { key: string; status: RowStatus; position: number | null; draftIndex?: number }
   ) {
-    const { key, status, position, draftIndex } = opts;
-    const editable = status === "normal";
-    const removed = status === "removed";
-    const canReorder = editable && sortKey === "index"; // drag only in official order
-    const i = draftIndex ?? -1;
-    const f = featureOf(t);
-    // A goal replaces the average-based outlier flag: when set, show off-goal dimensions.
-    const o = metricsOpen && !goal ? outliers.get(t.id) : undefined;
-    // Goal flags show whenever a goal is set (not just when the metrics panel is open) —
-    // the whole point is to surface tracks that miss the target.
-    const goalOff: GoalDeviation[] | undefined = goal ? goalDeviations.get(t.id) : undefined;
-    const isPlaying = isPlayingTrack(t.id);
-    const local = isLocalTrack(t.id);
-    const unavailable = t.is_playable === false; // greyed out on Spotify
-    const diffClass = status !== "normal" && status !== "unchanged" ? `diff-${status}` : "";
+    const i = opts.draftIndex ?? -1;
     return (
-      <li
-        key={key}
-        data-tid={t.id}
-        className={`track ${metricsOpen ? "with-feats" : ""} ${o ? "has-outlier" : ""} ${
-          isPlaying ? "playing" : ""
-        } ${isPlaying && playingActive ? "playing-active" : ""} ${
-          canReorder && overIndex === i ? "over" : ""
-        } ${flashId === t.id ? "flash" : ""} ${unavailable ? "unavailable" : ""} ${diffClass}`}
-        draggable={canReorder}
-        onDragStart={
-          canReorder
-            ? (e) => {
-                dragIndex.current = i;
-                e.dataTransfer.effectAllowed = "copyMove";
-                e.dataTransfer.setData("text/plain", String(i));
-                e.dataTransfer.setData(TRACK_MIME, JSON.stringify(t));
-              }
-            : undefined
-        }
-        onDragOver={
-          canReorder
-            ? (e) => {
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-                if (overIndex !== i) setOverIndex(i);
-              }
-            : undefined
-        }
-        onDragLeave={canReorder ? () => overIndex === i && setOverIndex(null) : undefined}
-        onDrop={
-          canReorder
-            ? (e) => {
-                e.preventDefault();
-                onDrop(i);
-              }
-            : undefined
-        }
-        onDragEnd={
-          canReorder
-            ? () => {
-                dragIndex.current = null;
-                setOverIndex(null);
-              }
-            : undefined
-        }
-        onDoubleClick={() => (local || removed ? undefined : playFrom(t))}
-      >
-        {editable ? (
-          canReorder ? (
-            <span className="grip" title="Drag to reorder">
-              ⋮⋮
-            </span>
-          ) : (
-            <span />
-          )
-        ) : (
-          <span className="diff-mark" aria-hidden>
-            {status === "added" ? "+" : status === "removed" ? "−" : status === "moved" ? "↕" : ""}
-          </span>
-        )}
-        <span className="t-num">
-          {isPlaying ? (
-            <span className="eq" aria-label="Now playing">
-              <i />
-              <i />
-              <i />
-            </span>
-          ) : (
-            position ?? ""
-          )}
-        </span>
-        <span className="t-title">
-          <span className="t-title-text">{t.title}</span>
-          {local && (
-            <span
-              className="local-tag"
-              title="Local file added on Spotify — playable only in the Spotify desktop app"
-            >
-              local
-            </span>
-          )}
-          {unavailable && (
-            <span
-              className="unavail-tag"
-              title="Greyed out on Spotify — unavailable in your region or removed. Can't be played by any Spotify client."
-            >
-              unavailable
-            </span>
-          )}
-          {status === "added" && <span className="diff-badge add">added</span>}
-          {status === "removed" && <span className="diff-badge rem">removing</span>}
-          {status === "moved" && <span className="diff-badge move">moved</span>}
-          {o && (
-            <span
-              className="outlier-chip"
-              title={
-                o.method === "multivariate"
-                  ? `Unusual combination of metrics for this playlist (distance ${o.z.toFixed(
-                      1
-                    )}, beyond the 95% envelope). Driven by: ${(o.contributors ?? [])
-                      .map(
-                        (c) =>
-                          `${FEATURE_LABEL[c.feature]} ${c.dir === "up" ? "↑" : "↓"} (${Math.round(
-                            c.share * 100
-                          )}%)`
-                      )
-                      .join(", ")}`
-                  : `This song's ${FEATURE_LABEL[o.feature]} is well ${
-                      o.dir === "up" ? "above" : "below"
-                    } the playlist average (${Math.abs(o.z).toFixed(1)}σ)`
-              }
-            >
-              {o.dir === "up" ? "▲" : "▼"} {FEATURE_LABEL[o.feature]}
-              {o.method === "multivariate" && (o.contributors?.length ?? 0) > 1 ? " +" : ""}
-            </span>
-          )}
-          {goalOff?.slice(0, 3).map((d) => (
-            <span
-              key={d.feature}
-              className="goal-chip"
-              title={`${FEATURE_LABEL[d.feature]} is ${Math.round(
-                Math.abs(d.diff) * 100
-              )}% ${d.dir === "up" ? "above" : "below"} your goal`}
-            >
-              {d.dir === "up" ? "▲" : "▼"} {FEATURE_LABEL[d.feature]}
-            </span>
-          ))}
-        </span>
-        <span className="t-artists">{t.artists.join(", ")}</span>
-        {metricsOpen && (
-          <span className="t-feats">
-            {cols.map((k, ci) => (
-              <span key={k} className="t-feat">
-                {f
-                  ? fmtFeature(f, k)
-                  : ci === 0
-                  ? analyzing.has(t.id)
-                    ? "…"
-                    : "–"
-                  : ""}
-              </span>
-            ))}
-          </span>
-        )}
-        <span className="t-dur">{fmtDuration(t.duration_ms)}</span>
-        {removed ? (
-          <span />
-        ) : (
-          <button
-            className="t-play"
-            title={
-              local
-                ? "Local file — playable only in the Spotify desktop app"
-                : unavailable
-                ? "Unavailable on Spotify — plays from the next available track"
-                : "Play in Setlist"
-            }
-            disabled={local}
-            onClick={() => playFrom(t)}
-          >
-            ▶
-          </button>
-        )}
-        {editable ? (
-          <button className="t-remove" title="Remove" onClick={() => removeAt(i)}>
-            ×
-          </button>
-        ) : (
-          <span />
-        )}
-      </li>
+      <TrackRow
+        key={opts.key}
+        track={t}
+        status={opts.status}
+        position={opts.position}
+        index={i}
+        canReorder={opts.status === "normal" && sortKey === "index"}
+        isDropTarget={overIndex === i}
+        isPlaying={isPlayingTrack(t.id)}
+        playingActive={playingActive}
+        isFlashing={flashId === t.id}
+        feature={featureOf(t)}
+        // A goal replaces the average-based outlier flag: when set, show off-goal dimensions.
+        outlier={metricsOpen && !goal ? outliers.get(t.id) : undefined}
+        // Goal flags show whenever a goal is set (not just when the metrics panel is open) —
+        // the whole point is to surface tracks that miss the target.
+        goalOff={goal ? goalDeviations.get(t.id) : undefined}
+        stillAnalyzing={analyzing.has(t.id)}
+        metricsOpen={metricsOpen}
+        cols={cols}
+        onDragStart={(idx) => {
+          dragIndex.current = idx;
+        }}
+        onDragEnter={(idx) => {
+          if (overIndex !== idx) setOverIndex(idx);
+        }}
+        onDragLeave={(idx) => {
+          if (overIndex === idx) setOverIndex(null);
+        }}
+        onDropAt={onDrop}
+        onDragEnd={() => {
+          dragIndex.current = null;
+          setOverIndex(null);
+        }}
+        onPlay={playFrom}
+        onRemove={removeAt}
+      />
     );
   }
 
@@ -1589,10 +1437,10 @@ export default function Library() {
             <ol className="tracks" ref={tracksRef}>
               {inDiff
                 ? diff.rows.map((r) =>
-                    trackRow(r.track, { key: r.key, status: r.status, position: r.position })
+                    renderRow(r.track, { key: r.key, status: r.status, position: r.position })
                   )
                 : orderedTracks.map(({ t, i }) =>
-                    trackRow(t, { key: `${t.id}-${i}`, status: "normal", position: i + 1, draftIndex: i })
+                    renderRow(t, { key: `${t.id}-${i}`, status: "normal", position: i + 1, draftIndex: i })
                   )}
             </ol>
           </>
