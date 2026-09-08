@@ -7,8 +7,12 @@ body:
       value: |
         Setlist is a curation tool: it exists to help you decide what belongs in a playlist and
         then push that decision to Spotify. Ideas that sharpen that are the ones most likely to
-        land. Playback, discovery and recommendation features are mostly Spotify's own job and
-        are usually a no — worth checking that first so you don't write a long issue for nothing.
+        land.
+
+        **Worth checking [ROADMAP.md](https://github.com/ulysses822/setlist/blob/main/ROADMAP.md)
+        first** — it lists what's planned, and what's deliberately not, with a pointer to a
+        project that does each of those things properly. Saves you writing a long issue for
+        nothing.
 
   - type: textarea
     id: problem

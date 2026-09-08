@@ -3,6 +3,10 @@
 Thanks for looking. Issues and pull requests are both welcome — including "this is confusing"
 and "the README is wrong", which are as useful as code.
 
+Before starting anything large, read [ROADMAP.md](ROADMAP.md). It says what's planned and
+what's deliberately out of scope, which is the cheapest way to avoid writing something that
+was never going to be merged.
+
 ## Before you start
 
 **Setlist only builds on Windows.** `src-tauri/src/lib.rs` has a `compile_error!` that says so,
@@ -22,8 +26,8 @@ npm install
 npm run tauri dev
 ```
 
-You need your own Spotify app for a client ID — [Getting started](README.md#getting-started)
-in the README walks through it. Tauri's own prerequisites (Rust, MSVC build tools) are at
+You need your own Spotify app for a client ID — [Download](README.md#download) in the README
+walks through it. Tauri's own prerequisites (Rust, MSVC build tools) are at
 <https://tauri.app/start/prerequisites/>.
 
 ## Before you open a PR

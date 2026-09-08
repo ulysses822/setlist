@@ -106,6 +106,9 @@ The three spicetify tools need your Spotify client patched. That is exactly how 
 data Setlist can't — and also why they need reinstalling when Spotify ships an update.
 Different trade, both reasonable.
 
+[ROADMAP.md](ROADMAP.md) carries this further: what's likely to be built next, and the
+things that are deliberately never going to be.
+
 ## Download
 
 Installers are on the [Releases page](https://github.com/ulysses822/setlist/releases) —
@@ -171,7 +174,9 @@ Rust, and the maths behind the editor is TypeScript.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the rest: what a PR wants to look like, the commit
 convention, and why the Windows-only build isn't a bug to be fixed in passing.
-[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) is short, and is what will actually be enforced.
+[ROADMAP.md](ROADMAP.md) is worth a look before starting anything large — it says what's
+planned and, more usefully, what isn't. [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) is short,
+and is what will actually be enforced.
 
 ### The listening-history logger (optional)
 

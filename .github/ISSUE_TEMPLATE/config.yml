@@ -6,5 +6,5 @@ contact_links:
     url: https://github.com/ulysses822/setlist/security/advisories/new
     about: Don't open a public issue. Report it privately here — see SECURITY.md.
   - name: Setup help
-    url: https://github.com/ulysses822/setlist#getting-started
+    url: https://github.com/ulysses822/setlist#download
     about: Getting started, the Spotify app you need, and where your data lives.
