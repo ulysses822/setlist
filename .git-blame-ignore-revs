@@ -8,3 +8,7 @@
 
 # Format with cargo fmt, and gate it in CI
 8353f443e7e09a4f86cc8228d72fcd08a2dbe9f2
+
+# Convert the frontend doc comments from Rust-style /// to /** */, so TypeScript
+# shows them on hover. No code changed.
+79af921ed9835c7cdb27d3bba94492ca4fb2da44
