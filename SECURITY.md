@@ -51,6 +51,13 @@ playlist is stored under must likewise be a single path component with no `:` in
 (`safe_name` in `src-tauri/src/spotify/store.rs`), so nothing in the folder can name a path
 outside it.
 
+The `git` the version-control panel drives is resolved to an absolute path out of `PATH`
+before it is spawned, and relative `PATH` entries — including the empty one Windows reads as
+"the current directory" — are skipped (`find_program` in `src-tauri/src/git.rs`). Naming the
+binary bare would let `CreateProcess` search the working directory first, so a `git.exe`
+committed into a cloned data repo would run as you the first time you pressed Commit, having
+been launched from inside that folder.
+
 Committing from the app stages the whole data folder (`git add -A`), so before it does,
 `ensure_ignored` in `src-tauri/src/git.rs` makes sure `.gitignore` covers `.env` and
 `.env.local` as well as the rebuildable cache and unpushed drafts. That matters because the

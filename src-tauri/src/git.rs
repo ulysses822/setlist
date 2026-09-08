@@ -2,9 +2,15 @@
 //! commit, and push their playlist edits (and curation/history changes) without dropping
 //! to a terminal. Everything shells out to `git` against the configured data dir and
 //! relies on the user's ambient credential helper for auth — exactly like a terminal push.
+//!
+//! That binary is resolved to an absolute path from `PATH` before it is ever spawned, and
+//! never named bare — see `find_program` for why the current directory has to stay out of
+//! the search.
 
-use std::path::Path;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 use serde::Serialize;
 
@@ -52,16 +58,103 @@ pub struct PushOutcome {
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// The extensions to try for a program name that carries none, in the order Windows itself
+/// would. `.EXE` ahead of `.BAT`/`.CMD` is the default and worth keeping: Rust refuses to spawn
+/// a batch file whose arguments it cannot safely escape (CVE-2024-24576), and a data-folder path
+/// is exactly the kind of argument that trips it.
+#[cfg(windows)]
+fn executable_extensions() -> Vec<String> {
+    parse_pathext(&std::env::var("PATHEXT").unwrap_or_default())
+}
+
+/// Split a `PATHEXT` value, falling back to Windows' own default when it is empty or holds
+/// nothing usable — an unset or mangled variable must not leave the search with no spellings
+/// to try and report git missing on a machine where it is plainly installed.
+#[cfg(windows)]
+fn parse_pathext(raw: &str) -> Vec<String> {
+    const FALLBACK: &str = ".COM;.EXE;.BAT;.CMD";
+    let split = |s: &str| -> Vec<String> {
+        s.split(';')
+            .map(|e| e.trim().to_string())
+            .filter(|e| e.starts_with('.'))
+            .collect()
+    };
+    let exts = split(raw);
+    if exts.is_empty() {
+        split(FALLBACK)
+    } else {
+        exts
+    }
+}
+
+/// Everywhere else an executable is its bare name.
+#[cfg(not(windows))]
+fn executable_extensions() -> Vec<String> {
+    vec![String::new()]
+}
+
+/// Find `name` in `path_var`, returning an absolute path.
+///
+/// Deliberately narrower than what the OS would do on its own: **every non-absolute entry is
+/// skipped**. On Windows an empty `PATH` entry means "the current directory", and `.`, `..` and
+/// any bare relative directory resolve against the process CWD — which is not ours to trust.
+/// Setlist runs git against a data folder the user may have cloned from anywhere, and
+/// `SECURITY.md` promises that folder is treated as untrusted input; if the app is ever started
+/// with its CWD inside such a clone, a `git.exe` committed into it must not be what we execute.
+fn find_program(name: &str, path_var: &OsStr, exts: &[String]) -> Option<PathBuf> {
+    for dir in std::env::split_paths(path_var) {
+        if !dir.is_absolute() {
+            continue;
+        }
+        for ext in exts {
+            let candidate = dir.join(format!("{name}{ext}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Resolved once, then reused: the lookup walks the filesystem and every tab switch runs
+/// several git calls. Only a success is cached, so installing git without restarting the app
+/// still works.
+static GIT_EXE: OnceLock<PathBuf> = OnceLock::new();
+
+/// The absolute path to the `git` binary, or a message explaining that there isn't one.
+///
+/// Passing an absolute path to `Command::new` is the point. A bare `"git"` is resolved by
+/// `CreateProcess`, which searches the current directory *before* `PATH` — see `find_program`.
+fn git_program() -> Result<&'static Path, String> {
+    if let Some(found) = GIT_EXE.get() {
+        return Ok(found.as_path());
+    }
+    let path_var = std::env::var_os("PATH").unwrap_or_default();
+    let found = find_program("git", &path_var, &executable_extensions()).ok_or_else(|| {
+        "Couldn't find git on your PATH. Install it from https://git-scm.com/downloads and \
+         restart Setlist — the version-control panel drives the real git binary."
+            .to_string()
+    })?;
+    Ok(GIT_EXE.get_or_init(|| found).as_path())
+}
+
 fn run(dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
-    let mut cmd = Command::new("git");
+    let mut cmd = Command::new(git_program()?);
     cmd.arg("-C").arg(dir).args(args);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    cmd.output()
-        .map_err(|e| format!("Couldn't run git (is it installed and on your PATH?): {e}"))
+    // "Not installed" is `git_program`'s answer above, so a failure here is the spawn itself:
+    // the binary was found and then couldn't be run (permissions, a broken shim, an antivirus
+    // holding it). Say which of the two happened rather than blaming PATH for both.
+    cmd.output().map_err(|e| {
+        let exe = git_program()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        format!("Couldn't run git at {exe}: {e}")
+    })
 }
 
 /// Trimmed stdout for a command expected to succeed; Err carries stderr otherwise.
@@ -813,6 +906,93 @@ pub fn push(dir: &Path) -> Result<PushOutcome, String> {
 mod tests {
     use super::*;
 
+    // --- program resolution ----------------------------------------------
+
+    /// The whole point of `find_program`: a relative `PATH` entry is never searched, so a
+    /// `git.exe` sitting in whatever directory the app happened to be started from cannot be
+    /// what we run. `""` is in the list because that is how Windows spells "the current
+    /// directory" inside `PATH`, and it is the spelling most likely to be there by accident.
+    ///
+    /// The decoy is real and the relative entries all name readable directories, so the only
+    /// thing keeping it out of the second assertion is the `is_absolute` check.
+    #[test]
+    fn only_absolute_path_entries_are_searched() {
+        let exts = vec![".probe".to_string()];
+        let dir = unique_dir("which");
+        let decoy = dir.join("git.probe");
+        std::fs::write(&decoy, "not really git").unwrap();
+
+        let relative = ["", ".", "..", "src"];
+        let absolute = dir.to_string_lossy().to_string();
+
+        // Found when the directory holding it is named absolutely.
+        let mut entries: Vec<String> = relative.iter().map(|s| s.to_string()).collect();
+        entries.push(absolute);
+        let path = std::env::join_paths(&entries).unwrap();
+        assert_eq!(find_program("git", &path, &exts).as_deref(), Some(&*decoy));
+
+        // And not found by any other spelling, even though `.` and `""` are real directories
+        // this process can read.
+        let relative_only = std::env::join_paths(relative).unwrap();
+        assert_eq!(find_program("git", &relative_only, &exts), None);
+
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Directory order wins over extension order, the way the OS resolves it: the first
+    /// directory holding any acceptable spelling answers, rather than the whole `PATH` being
+    /// swept for `.COM` before anything is tried as `.EXE`.
+    #[test]
+    fn the_first_directory_holding_a_match_answers() {
+        let exts = vec![".com".to_string(), ".exe".to_string()];
+        let first = unique_dir("which-first");
+        let second = unique_dir("which-second");
+        std::fs::write(first.join("git.exe"), "x").unwrap();
+        std::fs::write(second.join("git.com"), "x").unwrap();
+
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        assert_eq!(
+            find_program("git", &path, &exts).as_deref(),
+            Some(&*first.join("git.exe"))
+        );
+        assert_eq!(find_program("nothing-here", &path, &exts), None);
+
+        std::fs::remove_dir_all(&first).unwrap();
+        std::fs::remove_dir_all(&second).unwrap();
+    }
+
+    /// `Command::new` is only safe from the current-directory search if what it is handed is
+    /// absolute, so that property belongs on the value `run` actually uses.
+    #[test]
+    fn the_resolved_git_is_an_absolute_file() {
+        let Ok(exe) = git_program() else {
+            eprintln!("skipping: git not available");
+            return;
+        };
+        assert!(exe.is_absolute(), "{}", exe.display());
+        assert!(exe.is_file(), "{}", exe.display());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_broken_pathext_still_leaves_something_to_try() {
+        // Whatever PATHEXT says, the search must end up with candidate spellings — otherwise
+        // git is reported missing on a machine where it is plainly installed.
+        for junk in ["", "   ", ";;;", "exe;com"] {
+            assert!(
+                parse_pathext(junk)
+                    .iter()
+                    .any(|e| e.eq_ignore_ascii_case(".exe")),
+                "PATHEXT {junk:?} left no way to find git.exe"
+            );
+        }
+        // A real one is honoured as given, in its own order.
+        assert_eq!(parse_pathext(".EXE;.CMD"), vec![".EXE", ".CMD"]);
+        // Entries without a leading dot are not extensions and are dropped rather than
+        // producing a candidate called "gitexe".
+        assert_eq!(parse_pathext(".EXE;junk;.CMD"), vec![".EXE", ".CMD"]);
+    }
+
     fn track(id: &str, title: &str, artist: &str) -> TrackEntry {
         TrackEntry {
             id: id.into(),
@@ -935,16 +1115,22 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
 
+    // Both helpers go through `git_program()` rather than naming "git" bare, so the setup in
+    // these tests resolves the binary exactly the way `run` does.
     fn git_available() -> bool {
-        Command::new("git")
-            .arg("--version")
-            .output()
+        git_program()
+            .and_then(|exe| {
+                Command::new(exe)
+                    .arg("--version")
+                    .output()
+                    .map_err(|e| e.to_string())
+            })
             .map(|o| o.status.success())
             .unwrap_or(false)
     }
 
     fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
+        let out = Command::new(git_program().unwrap())
             .arg("-C")
             .arg(dir)
             .args(args)
