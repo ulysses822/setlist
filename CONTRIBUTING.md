@@ -8,11 +8,11 @@ lists what's out of scope — cheaper than writing something that was never goin
 
 ## Before you start
 
-**Setlist only builds on Windows.** `src-tauri/src/lib.rs` has a `compile_error!` that says so,
-and it's deliberate rather than an accident waiting to be fixed: the app leans on the Windows
-Credential Manager for token storage and WebView2 for the renderer, and there is no tested
-equivalent on the other platforms. If you want to change that, open an issue first — it's a
-real piece of design work, not a build-flag change.
+**Setlist only builds on Windows.** `src-tauri/src/spotify/auth.rs` has a `compile_error!` that
+says so, and it's deliberate rather than an accident waiting to be fixed: the app leans on the
+Windows Credential Manager for token storage and WebView2 for the renderer, and there is no
+tested equivalent on the other platforms. If you want to change that, open an issue first —
+it's a real piece of design work, not a build-flag change.
 
 The frontend half (`src/`, `npm run build`) type-checks and builds anywhere, so documentation,
 UI and TypeScript fixes are approachable from macOS and Linux. You just can't run the Rust
