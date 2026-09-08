@@ -114,6 +114,79 @@ pub fn validate_data_dir(configured: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// True when `candidate` is `protected`, or sits anywhere underneath it.
+///
+/// Compared component by component rather than as strings, so a folder called `setlist-data`
+/// is not read as living inside one called `setlist`. Both sides are canonicalized first
+/// where they exist, which resolves `..`, symlinks and 8.3 short names into the one spelling
+/// the filesystem agrees on; a directory that doesn't exist yet is compared as written.
+/// Windows path components are case-insensitive, so they are matched that way.
+fn is_within(candidate: &Path, protected: &Path) -> bool {
+    let real = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let (candidate, protected) = (real(candidate), real(protected));
+    let same = |a: &std::path::Component, b: &std::path::Component| {
+        if cfg!(windows) {
+            a.as_os_str()
+                .eq_ignore_ascii_case(b.as_os_str().to_string_lossy().as_ref())
+        } else {
+            a == b
+        }
+    };
+    let mut walk = candidate.components();
+    protected
+        .components()
+        .all(|p| walk.next().is_some_and(|c| same(&c, &p)))
+}
+
+/// The directories a data folder must not live inside, each with a name for the error.
+///
+/// All three are removed when Setlist is uninstalled — the installer deletes the program
+/// directory, and the "delete settings and the saved login" checkbox deletes the other two
+/// (see `nsis/hooks.nsh` and the Uninstalling table in the README). A data folder placed in
+/// any of them would be deleted along with them, which is the one thing the README promises
+/// cannot happen.
+fn protected_dirs(app: &tauri::AppHandle) -> Vec<(PathBuf, &'static str)> {
+    let mut dirs = Vec::new();
+    if let Ok(dir) = app.path().app_config_dir() {
+        dirs.push((dir, "Setlist's settings folder"));
+    }
+    if let Ok(dir) = app.path().app_local_data_dir() {
+        dirs.push((dir, "Setlist's app-data folder"));
+    }
+    // The install directory, which the uninstaller removes wholesale.
+    if let Some(dir) = std::env::current_exe().ok().and_then(|exe| {
+        exe.parent()
+            .map(|p| p.to_path_buf())
+            .filter(|p| !p.as_os_str().is_empty())
+    }) {
+        dirs.push((dir, "the folder Setlist itself is installed in"));
+    }
+    dirs
+}
+
+/// Validate a data folder the user has just chosen. Everything `validate_data_dir` checks,
+/// plus: it must not be inside anything an uninstall deletes.
+///
+/// Enforced here, at the one place a folder is chosen, rather than on every read. A path
+/// already saved before this existed keeps working — refusing it on read would lock someone
+/// out of the Setup screen they need in order to fix it.
+pub fn validate_data_dir_choice(
+    app: &tauri::AppHandle,
+    configured: &str,
+) -> Result<PathBuf, String> {
+    let path = validate_data_dir(configured)?;
+    for (dir, what) in protected_dirs(app) {
+        if is_within(&path, &dir) {
+            return Err(format!(
+                "That folder is inside {what}, which uninstalling Setlist deletes — your \
+                 playlists and play history would go with it. Choose somewhere outside the \
+                 app, such as a dedicated repo under your user folder."
+            ));
+        }
+    }
+    Ok(path)
+}
+
 /// Resolve where to read/write the data files. The data folder must be explicitly
 /// configured — there is deliberately no fallback to the app's own directory, so playlist
 /// data and app code can never mix.
@@ -128,6 +201,60 @@ pub fn resolve_data_dir(cfg: &AppConfig) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The containment rule behind `validate_data_dir_choice`. Tested here rather than through
+    /// that function because the protected directories come off an `AppHandle`, which a unit
+    /// test has no way to build — but the decision itself is this, and it is the part that can
+    /// be wrong.
+    #[test]
+    fn a_folder_inside_a_protected_one_is_recognised() {
+        let app = PathBuf::from(r"C:\Users\me\AppData\Roaming\com.setlist.app");
+
+        // The folder itself, and anything under it, is out.
+        assert!(is_within(&app, &app));
+        assert!(is_within(&app.join("playlists"), &app));
+        assert!(is_within(&app.join("data").join("deep"), &app));
+
+        // A sibling whose name merely starts with the same characters is not inside it --
+        // the bug a plain `starts_with` on strings would have.
+        let roaming = app.parent().unwrap();
+        assert!(!is_within(&roaming.join("com.setlist.app-data"), &app));
+        assert!(!is_within(&roaming.join("com.setlist"), &app));
+
+        // And an ordinary choice somewhere else entirely is fine.
+        assert!(!is_within(
+            &PathBuf::from(r"C:\Users\me\music\setlist-data"),
+            &app
+        ));
+        // A parent is not inside its own child.
+        assert!(!is_within(roaming, &app));
+    }
+
+    /// Windows path components are case-insensitive, so a folder reached by a differently-cased
+    /// spelling is the same folder and must be refused just the same. Neither path here exists,
+    /// which is the case that skips canonicalization and relies on the comparison alone.
+    #[cfg(windows)]
+    #[test]
+    fn case_does_not_get_a_folder_past_the_check() {
+        assert!(is_within(
+            &PathBuf::from(r"C:\Users\Me\APPDATA\Roaming\Com.Setlist.App\playlists"),
+            &PathBuf::from(r"C:\users\me\appdata\roaming\com.setlist.app"),
+        ));
+    }
+
+    /// `..` must not walk out of a protected directory and back in. Canonicalization is what
+    /// collapses it, so both paths have to exist for this to mean anything.
+    #[test]
+    fn a_dot_dot_detour_does_not_escape_the_check() {
+        let (protected, _) = dirs("within");
+        let inside = protected.join("playlists");
+        std::fs::create_dir_all(&inside).unwrap();
+
+        let detour = inside.join("..").join("playlists");
+        assert!(is_within(&detour, &protected), "{}", detour.display());
+
+        std::fs::remove_dir_all(protected.parent().unwrap()).unwrap();
+    }
 
     fn dirs(tag: &str) -> (PathBuf, PathBuf) {
         let nanos = std::time::SystemTime::now()

@@ -53,8 +53,11 @@ fn set_config(app: tauri::AppHandle, client_id: String, data_dir: String) -> Res
     // Reject a bad folder at save time (clear feedback in Setup) rather than on first use.
     // Empty is allowed here — e.g. connecting before choosing a folder — but every command
     // that touches data will refuse until one is configured.
+    //
+    // This is the only place a data folder is chosen, so it is where the README's "keep it
+    // outside this app's folder" is actually enforced rather than merely advised.
     if !data_dir.is_empty() {
-        config::validate_data_dir(&data_dir)?;
+        config::validate_data_dir_choice(&app, &data_dir)?;
     }
     config::save(
         &app,

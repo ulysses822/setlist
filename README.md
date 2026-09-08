@@ -127,8 +127,9 @@ The installer isn't code-signed, so SmartScreen will stop you with "Windows prot
 PC" — **More info → Run anyway**. If that's a dealbreaker, build it yourself below.
 
 Then, on first run, open the **Setup** tab: paste the Client ID, **Browse…** to a data
-folder (a dedicated private git repo works best — keep it outside this app's folder, which
-Setlist enforces), then **Connect Spotify** and **Pull** your playlists.
+folder (a dedicated private git repo works best — Setup refuses one inside the app's own
+folders, since uninstalling deletes those), then **Connect Spotify** and **Pull** your
+playlists.
 
 ![The Setup tab: a field for the Spotify Client ID, a data-folder picker, the redirect URI
 to register, and buttons to connect and pull playlists.](docs/screenshots/setup.png)
@@ -237,6 +238,9 @@ it removes three things:
 column layouts are yours and stay exactly where they are, uninstall or not — reinstall, point
 Setlist at the same folder, and it picks up mid-edit. The only thing the checkbox costs you is
 your light/dark preference.
+
+That holds because Setup won't let you put the data folder inside any of the three rows above,
+or inside the install directory — which is the only way an uninstall could reach it.
 
 ## Good to know
 
