@@ -36,13 +36,13 @@
 import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 
+// Matches the desktop app's loopback catcher (src-tauri/src/spotify/auth.rs). The port is not
+// negotiable: Spotify matches the redirect URI exactly against the one registered on the
+// dashboard, so it has to be the same 8888 the README tells you to register.
 const REDIRECT = "http://127.0.0.1:8888/callback";
 const TOKEN_URL = "https://accounts.spotify.com/api/token";
 const SCOPE = "user-read-recently-played";
 const EXCHANGE_TIMEOUT_MS = 20_000;
-// Matches the desktop app's loopback catcher (src-tauri/src/spotify/auth.rs). The port is not
-// negotiable: Spotify matches the redirect URI exactly against the one registered on the
-// dashboard, so it has to be the same 8888 the README tells you to register.
 const LISTEN_TIMEOUT_MS = 5 * 60_000;
 const TIMEOUT_MINS = Math.round(LISTEN_TIMEOUT_MS / 60_000);
 

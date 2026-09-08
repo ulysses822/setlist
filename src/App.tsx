@@ -138,7 +138,9 @@ function App() {
     })();
   }, []);
 
-  // Refresh the connection indicator whenever the user switches tabs.
+  // Refresh the connection indicator whenever the user switches tabs. A failure here means
+  // the keyring couldn't be read, which every command that needs it will report properly —
+  // an indicator that stays as it was beats one that flaps on a transient miss.
   useEffect(() => {
     api.authStatus().then(setConnected).catch(() => {});
   }, [tab]);

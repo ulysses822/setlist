@@ -308,6 +308,8 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       .then((rp) => {
         if (!cancelled && rp) applyRemoteState(rp);
       })
+      // Nothing playing elsewhere is the common answer and not an error; a real failure shows
+      // up the moment the user asks for playback, with a message that fits what they did.
       .catch(() => {});
 
     return () => {
