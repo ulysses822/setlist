@@ -5,10 +5,10 @@
  * Refreshes a Spotify access token, fetches the last 50 recently-played tracks,
  * and appends any new plays to history/plays.jsonl (deduped by track_id + played_at).
  *
- * Plain Node ESM (.mjs) on purpose: it uses only Node built-ins (node:fs, node:path,
- * and global fetch on Node 18+), so CI runs it with `node` and needs NO npm install.
- * That keeps the job's supply-chain surface at zero — no third-party package is fetched
- * or executed in an environment that holds the Spotify secrets.
+ * Plain Node ESM (.mjs) on purpose: it uses only Node built-ins (node:fs, node:path, and
+ * global fetch plus AbortSignal.timeout on Node 18+), so CI runs it with `node` and needs NO
+ * npm install. That keeps the job's supply-chain surface at zero — no third-party package is
+ * fetched or executed in an environment that holds the Spotify secrets.
  *
  * Required env (set as GitHub Actions secrets):
  *   SPOTIFY_CLIENT_ID       - your Spotify app client id
@@ -31,10 +31,71 @@ const HISTORY_FILE = "history/plays.jsonl";
 const TOKEN_URL = "https://accounts.spotify.com/api/token";
 const RECENT_URL = "https://api.spotify.com/v1/me/player/recently-played?limit=50";
 
+// Node's fetch has no default timeout. This runs unattended on a cron, so a socket that
+// connects and then goes quiet would hold the job open until GitHub's six-hour ceiling --
+// and the workflow's concurrency group doesn't cancel in progress, so every later run would
+// queue behind it rather than replace it.
+const REQUEST_TIMEOUT_MS = 20_000;
+// Three attempts, ~8s of backoff between them. Worth having because a lost run is more than a
+// red X: recently-played only reaches back 50 tracks, so a window nobody retried is a
+// permanent hole in the log. (The workflow already retries the *push* for the same reason.)
+const ATTEMPTS = 3;
+const BACKOFF_MS = [2_000, 6_000];
+// Wait out a Retry-After up to this long. Beyond it, give up and let the next run in 30
+// minutes cover the same tracks -- sitting in a paid CI job for several minutes buys nothing.
+const MAX_RETRY_AFTER_MS = 30_000;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function env(name, required = true) {
   const v = process.env[name];
   if (!v && required) throw new Error(`Missing required env var: ${name}`);
   return v ?? "";
+}
+
+// How long to hold off before asking again, honouring Retry-After when Spotify sends a usable
+// one and falling back to the fixed backoff when it doesn't (the header may legally be an
+// HTTP-date, which Number() reads as NaN).
+function backoffFor(resp, attempt) {
+  const advised = Number(resp.headers.get("retry-after"));
+  const ms =
+    Number.isFinite(advised) && advised > 0 ? advised * 1000 : BACKOFF_MS[attempt - 1];
+  return Math.min(ms, MAX_RETRY_AFTER_MS);
+}
+
+/**
+ * fetch with a deadline, retried only on the failures a later attempt could plausibly fix:
+ * a transport error (including our own timeout), a 429, or a 5xx. A 4xx is Spotify answering
+ * the question -- a dead refresh token doesn't become live on the third ask -- so it comes
+ * straight back for the caller to report.
+ */
+async function request(url, options, what) {
+  for (let attempt = 1; ; attempt++) {
+    const last = attempt === ATTEMPTS;
+    let resp;
+    try {
+      resp = await fetch(url, {
+        ...options,
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      });
+    } catch (e) {
+      if (last) {
+        throw new Error(`${what} failed after ${ATTEMPTS} attempts: ${e.message}`, {
+          cause: e,
+        });
+      }
+      console.warn(`${what}: ${e.message} — retrying (attempt ${attempt + 1} of ${ATTEMPTS}).`);
+      await sleep(BACKOFF_MS[attempt - 1]);
+      continue;
+    }
+    if (!last && (resp.status === 429 || resp.status >= 500)) {
+      const wait = backoffFor(resp, attempt);
+      console.warn(`${what}: HTTP ${resp.status} — retrying in ${Math.round(wait / 1000)}s.`);
+      await sleep(wait);
+      continue;
+    }
+    return resp;
+  }
 }
 
 async function getAccessToken() {
@@ -57,7 +118,12 @@ async function getAccessToken() {
       "Basic " + Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
   }
 
-  const res = await fetch(TOKEN_URL, { method: "POST", headers, body });
+  // Safe to retry in the configuration this script asks for: with the client secret set, the
+  // grant is confidential and Spotify does not rotate the refresh token, so re-sending is
+  // idempotent. Without it the token rotates on use and a retry can land on an already-spent
+  // one — but that mode is already broken by the next run for the reason main() warns about,
+  // so this makes nothing worse.
+  const res = await request(TOKEN_URL, { method: "POST", headers, body }, "Token refresh");
   if (!res.ok) {
     throw new Error(`Token refresh failed: ${res.status} ${await res.text()}`);
   }
@@ -66,9 +132,11 @@ async function getAccessToken() {
 }
 
 async function fetchRecent(accessToken) {
-  const res = await fetch(RECENT_URL, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-  });
+  const res = await request(
+    RECENT_URL,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+    "recently-played"
+  );
   if (!res.ok) {
     throw new Error(`recently-played failed: ${res.status} ${await res.text()}`);
   }
