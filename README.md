@@ -69,6 +69,43 @@ against Spotify.](docs/screenshots/library.png)
   secrets stay with your private data. The Setup screen installs it and mints a
   minimal-scope token with one click each.
 
+## How it compares
+
+There are good tools in and around Spotify, and most of them are not trying to do this.
+The honest map:
+
+### What Setlist does that they don't
+
+- **Your playlists exist outside Spotify.** The tools below edit Spotify directly — the
+  playlist is Spotify's, and your curation work lives or dies with your account and with
+  the tool. Setlist's source of truth is a JSON file in a repo you own. Uninstall it and
+  you still have your library.
+- **Nothing reaches Spotify unreviewed.** Draft, save, diff, push — with drift detection
+  that refuses to clobber a playlist something else changed while you weren't looking.
+  None of the tools below has a review step; they write as you click.
+- **A Spotify update can't break it.** Setlist talks to the documented Web API through
+  your own registered app. The three extension-based tools patch your installed Spotify
+  client, which Spotify periodically breaks.
+- **Nothing sits between you and Spotify.** Requests go from your machine to Spotify, and
+  to ReccoBeats for audio features. No relay, no proxy, no analytics.
+
+### When you want something else
+
+Setlist is narrow on purpose. If one of these is what you're actually after, use the tool
+that does it properly — several of them do it very well.
+
+| You want | Use | Why not Setlist |
+|---|---|---|
+| To theme or reskin Spotify, or add UI tweaks to the client | [spicetify](https://github.com/spicetify/cli) | Setlist is a separate app; it doesn't touch the Spotify client at all |
+| Listening **statistics** — dashboards, top artists, listening time, several users, your complete history | [your_spotify](https://github.com/Yooooomi/your_spotify) | Setlist's history log is a curation aid ("what am I not playing?"), not a stats product, and it only knows what it has logged since you installed it |
+| Richer per-track data — Spotify's own audio features, play counts, genres, Last.fm scrobbles — or self-updating rule-based playlists | [sort-play](https://github.com/hoeci/sort-play) | Running inside the Spotify client lets it read data the public Web API doesn't expose. Setlist uses ReccoBeats, whose coverage is patchier, and has no rule-based playlists |
+| To tag and rate tracks with your own vocabulary | [tagify](https://github.com/alexk218/tagify) | Setlist *measures* tracks; it doesn't let you annotate them |
+| To manage local audio files rather than a Spotify library | [Playlist-Manager-SMP](https://github.com/regorxxx/Playlist-Manager-SMP) | Setlist manages Spotify playlists and has no concept of a file on disk being a song |
+
+The three spicetify tools need your Spotify client patched. That is exactly how they reach
+data Setlist can't — and also why they need reinstalling when Spotify ships an update.
+Different trade, both reasonable.
+
 ## Download
 
 Installers are on the [Releases page](https://github.com/ulysses822/setlist/releases) —
