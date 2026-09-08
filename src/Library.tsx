@@ -3,7 +3,6 @@ import {
   api,
   type LocalPlaylist,
   type LocalTrackHit,
-  type ReplacementSuggestion,
   type SearchResult,
   type TrackEntry,
 } from "./api";
@@ -17,14 +16,9 @@ import {
   isLocalTrack,
   type FeatureKey,
 } from "./metricsCalc";
-import {
-  issueCount,
-  lintPlaylist,
-  removeExactDuplicates,
-  removeTracksByIds,
-  type CrossDupGroup,
-  type DupGroup,
-} from "./lint";
+import { removeExactDuplicates, type CrossDupGroup } from "./lint";
+import { usePlaylistDoctor } from "./usePlaylistDoctor";
+import IssuesStrip from "./IssuesStrip";
 import LibraryOverlay, {
   emptyOverlay,
   type Overlay,
@@ -120,13 +114,6 @@ export default function Library() {
   const [menuOpen, setMenuOpen] = useState(false); // editor header ⋮ menu
   const [editMeta, setEditMeta] = useState(false); // editing title/description inline
 
-  // Cleanup "doctor": the per-playlist issues panel (the library-wide scan is an overlay).
-  const [issuesOpen, setIssuesOpen] = useState(false);
-  // Replacement search for unavailable tracks, keyed by full track id: "loading", a found
-  // suggestion, or null (searched, nothing close). Absent = not searched yet.
-  const [replaceState, setReplaceState] = useState<
-    Record<string, ReplacementSuggestion | "loading" | null>
-  >({});
 
   // The library-wide panel currently taking over the editor pane, if any, and whether its
   // loader is still running. One value for all five (see LibraryOverlay): they are
@@ -199,7 +186,10 @@ export default function Library() {
     onOpened: (focusTrackId) => {
       setSortKey("index"); // open in official order
       setSortDir("asc");
-      setIssuesOpen(false);
+      // Collapse the cleanup panel so it doesn't arrive open on the new playlist. Forward
+      // reference to the hook below, safe for the same reason `onDeleted` above is: nothing
+      // calls this until a playlist is opened, long after both exist.
+      doctor.reset();
       setOverlay(null); // a playlist takes the pane back from whichever panel had it
       setEditMeta(false);
       if (focusTrackId) setFocusTrack(focusTrackId);
@@ -227,6 +217,16 @@ export default function Library() {
   } = draftApi;
 
   const metrics = usePlaylistMetrics(selected, draft?.tracks ?? null);
+
+  // What's wrong with the open playlist, and the fixes for it (see usePlaylistDoctor). Reads
+  // the draft rather than the file, so it re-lints as you edit and every fix lands as an edit
+  // you can review in the diff before it is pushed.
+  const doctor = usePlaylistDoctor({
+    tracks: draft?.tracks ?? null,
+    edit,
+    onStatus: setStatus,
+    onReplaced: (track) => metrics.loadFeatures([track]),
+  });
   const {
     featureMap,
     setFeatureMap,
@@ -284,21 +284,6 @@ export default function Library() {
   function removeAt(i: number) {
     if (!draft) return;
     edit(draft.tracks.filter((_, idx) => idx !== i));
-  }
-
-  // --- Cleanup fixes (operate on the draft; reviewable in the diff before push) ---
-  function fixExactDuplicates() {
-    if (!draft) return;
-    edit(removeExactDuplicates(draft.tracks));
-  }
-
-  // Resolve an ISRC group down to the one release to keep, removing the other variants.
-  function keepIsrcVariant(group: DupGroup, keepId: string) {
-    if (!draft) return;
-    const remove = new Set(
-      group.occurrences.map((o) => bareId(o.track.id)).filter((id) => id !== keepId)
-    );
-    edit(removeTracksByIds(draft.tracks, remove));
   }
 
   // Open one of the library-wide panels: stage any pending edits (the panels read from disk,
@@ -363,39 +348,6 @@ export default function Library() {
       setFeatureMap(feat); // reuse for the editor's metrics later
       return { kind: "similarity", data, feat };
     });
-
-  // Search for a playable stand-in for an unavailable track (library first, then Spotify).
-  async function findReplacement(t: TrackEntry) {
-    setReplaceState((p) => ({ ...p, [t.id]: "loading" }));
-    try {
-      const s = await api.suggestReplacement(t);
-      setReplaceState((p) => ({ ...p, [t.id]: s }));
-    } catch (e) {
-      setReplaceState((p) => ({ ...p, [t.id]: null }));
-      setStatus({ kind: "err", msg: String(e) });
-    }
-  }
-
-  // Swap the unavailable track at `index` for its suggested replacement, preserving when/who
-  // added it. Staged on Save, reviewable in the diff before pushing.
-  function applyReplacement(index: number, s: ReplacementSuggestion) {
-    if (!draft) return;
-    const old = draft.tracks[index];
-    if (!old) return;
-    const replaced: TrackEntry = {
-      id: s.id,
-      isrc: s.isrc,
-      title: s.title,
-      artists: s.artists,
-      added_at: old.added_at,
-      added_by: old.added_by,
-      duration_ms: s.duration_ms,
-      is_playable: true,
-    };
-    edit(draft.tracks.map((t, i) => (i === index ? replaced : t)));
-    loadFeatures([replaced]);
-    setStatus({ kind: "ok", msg: `Replaced "${old.title}" with a playable version` });
-  }
 
   // Normalize a cross-playlist near-dup: keep one track id, replace the other variants with
   // it in every playlist they appear in (collapsing any duplicate that creates). Stages each
@@ -577,7 +529,6 @@ export default function Library() {
   const inDiff = showDiff && diff.changed;
 
   // Live cleanup issues for the open playlist (recomputed as you edit the draft).
-  const lint = useMemo(() => lintPlaylist(draft?.tracks ?? []), [draft]);
 
   // Display order for the editable track list. Each entry keeps its real draft index `i`
   // (used for editing and shown as the official "#"), so a title/duration sort is purely a
@@ -1231,128 +1182,7 @@ export default function Library() {
               </div>
             )}
 
-            {!inDiff && issueCount(lint) > 0 && (
-              <div className="issues-strip">
-                <button className="issues-toggle" onClick={() => setIssuesOpen((o) => !o)}>
-                  <span className="caret">{issuesOpen ? "▾" : "▸"}</span>
-                  <span className="issues-label">
-                    ⚠ {issueCount(lint)} cleanup issue{issueCount(lint) > 1 ? "s" : ""}
-                  </span>
-                </button>
-                {issuesOpen && (
-                  <div className="issues-body">
-                    {lint.exact.length > 0 && (
-                      <div className="issue-group">
-                        <div className="issue-group-head">
-                          <span>Exact duplicates</span>
-                          <button className="btn ghost small" onClick={fixExactDuplicates}>
-                            Remove all duplicates
-                          </button>
-                        </div>
-                        {lint.exact.map((g) => (
-                          <div className="issue-row" key={g.key}>
-                            <span className="issue-title">{g.occurrences[0].track.title}</span>
-                            <span className="issue-meta">
-                              {g.occurrences[0].track.artists.join(", ")} · appears{" "}
-                              {g.occurrences.length}×
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {lint.isrc.length > 0 && (
-                      <div className="issue-group">
-                        <div className="issue-group-head">
-                          <span>Possible duplicates (same recording)</span>
-                        </div>
-                        {lint.isrc.map((g) => (
-                          <div className="issue-isrc" key={g.key}>
-                            {g.occurrences.map((o) => (
-                              <div className="isrc-variant" key={o.track.id}>
-                                <span className="issue-title">{o.track.title}</span>
-                                <span className="issue-meta">
-                                  {o.track.artists.join(", ")} · {fmtDuration(o.track.duration_ms)}
-                                </span>
-                                <button
-                                  className="btn ghost small"
-                                  onClick={() => keepIsrcVariant(g, bareId(o.track.id))}
-                                >
-                                  Keep this
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {lint.unavailable.length > 0 && (
-                      <div className="issue-group">
-                        <div className="issue-group-head">
-                          <span>Unavailable tracks</span>
-                          <span className="hint">
-                            greyed out on Spotify — find a near-identical playable swap
-                          </span>
-                        </div>
-                        {lint.unavailable.map(({ track: u, index }) => {
-                          const r = replaceState[u.id];
-                          return (
-                            <div className="issue-unavail" key={`${u.id}-${index}`}>
-                              <div className="issue-row">
-                                <span className="issue-title">{u.title}</span>
-                                <span className="issue-meta">
-                                  {u.artists.join(", ")} · {fmtDuration(u.duration_ms)}
-                                </span>
-                                <button
-                                  className="btn ghost small"
-                                  disabled={blocked || r === "loading"}
-                                  onClick={() => void findReplacement(u)}
-                                  title={
-                                    blocked
-                                      ? "Spotify search paused — rate-limited"
-                                      : "Look for a playable stand-in"
-                                  }
-                                >
-                                  {r === "loading"
-                                    ? "Searching…"
-                                    : r || r === null
-                                    ? "Search again"
-                                    : "Find replacement"}
-                                </button>
-                              </div>
-                              {r && r !== "loading" && (
-                                <div className="replacement">
-                                  <span className="repl-arrow" aria-hidden>
-                                    ↳
-                                  </span>
-                                  <span className="issue-title">{r.title}</span>
-                                  <span className="issue-meta">
-                                    {r.artists.join(", ")} · {fmtDuration(r.duration_ms)} ·{" "}
-                                    {r.source === "library"
-                                      ? `from "${r.playlist}"`
-                                      : "from Spotify"}
-                                  </span>
-                                  <button
-                                    className="btn ghost small"
-                                    onClick={() => applyReplacement(index, r)}
-                                  >
-                                    Replace
-                                  </button>
-                                </div>
-                              )}
-                              {r === null && (
-                                <div className="replacement">
-                                  <span className="hint">No close playable match found.</span>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+            {!inDiff && doctor.count > 0 && <IssuesStrip doctor={doctor} blocked={blocked} />}
 
             {diff.changed && (
               <div className="changes-bar">
