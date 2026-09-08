@@ -174,8 +174,7 @@ Rust, and the maths behind the editor is TypeScript.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) has the rest: what a PR wants to look like, the commit
 convention, and why the Windows-only build isn't a bug to be fixed in passing.
-[ROADMAP.md](ROADMAP.md) is worth a look before starting anything large — nothing is
-currently planned, but it lists what's out of scope and why.
+[ROADMAP.md](ROADMAP.md) is worth a look before starting anything large.
 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) is short, and is what will actually be enforced.
 
 ### The listening-history logger (optional)
