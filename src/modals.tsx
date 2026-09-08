@@ -4,8 +4,10 @@
 import { useEffect, useState } from "react";
 import type { LocalPlaylist, SyncStatus } from "./api";
 
-/// Generic confirm dialog (in-app replacement for window.confirm). Enter confirms,
-/// Escape cancels; clicking the backdrop cancels.
+/**
+ * Generic confirm dialog (in-app replacement for window.confirm). Enter confirms,
+ * Escape cancels; clicking the backdrop cancels.
+ */
 export function ConfirmModal({
   message,
   confirmLabel,

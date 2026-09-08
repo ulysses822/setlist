@@ -81,8 +81,10 @@ export function lintPlaylist(tracks: TrackEntry[]): PlaylistLint {
   return { exact, isrc, unavailable, redundant };
 }
 
-/// Total number of issue *groups* (used for badge counts where one group = one thing to look
-/// at, regardless of how many copies).
+/**
+ * Total number of issue *groups* (used for badge counts where one group = one thing to look
+ * at, regardless of how many copies).
+ */
 export function issueCount(lint: PlaylistLint): number {
   return lint.exact.length + lint.isrc.length + lint.unavailable.length;
 }
@@ -160,7 +162,7 @@ export function crossPlaylistIsrcDuplicates(
   return out;
 }
 
-/// Drop every duplicate occurrence of a track id, keeping the first. Returns a new array.
+/** Drop every duplicate occurrence of a track id, keeping the first. Returns a new array. */
 export function removeExactDuplicates(tracks: TrackEntry[]): TrackEntry[] {
   const seen = new Set<string>();
   return tracks.filter((t) => {
@@ -171,8 +173,10 @@ export function removeExactDuplicates(tracks: TrackEntry[]): TrackEntry[] {
   });
 }
 
-/// Remove every track whose bare id is in `ids`. Used to resolve an ISRC group down to the
-/// one release you want to keep.
+/**
+ * Remove every track whose bare id is in `ids`. Used to resolve an ISRC group down to the
+ * one release you want to keep.
+ */
 export function removeTracksByIds(tracks: TrackEntry[], ids: Set<string>): TrackEntry[] {
   return tracks.filter((t) => !ids.has(bareId(t.id)));
 }

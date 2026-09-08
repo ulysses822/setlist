@@ -10,51 +10,63 @@ import {
 } from "./metricsCalc";
 import { type DiffStatus } from "./playlistDiff";
 
-/// The drag payload a row writes when it is picked up, and the sidebar reads when a track is
-/// dropped onto another playlist. Declared here because this is the only thing that writes it;
-/// `Library` imports it for the drop target so the two can't disagree about the type.
+/**
+ * The drag payload a row writes when it is picked up, and the sidebar reads when a track is
+ * dropped onto another playlist. Declared here because this is the only thing that writes it;
+ * `Library` imports it for the drop target so the two can't disagree about the type.
+ */
 export const TRACK_MIME = "application/x-setlist-track";
 
-/// "normal" is the editable row. Anything else is a read-only diff row, styled by how the
-/// track differs from the Spotify mirror.
+/**
+ * "normal" is the editable row. Anything else is a read-only diff row, styled by how the
+ * track differs from the Spotify mirror.
+ */
 export type RowStatus = DiffStatus | "normal";
 
 export interface TrackRowProps {
   track: TrackEntry;
   status: RowStatus;
-  /// Official position in the list, or null for a diff row that has none (a removed track).
+  /** Official position in the list, or null for a diff row that has none (a removed track). */
   position: number | null;
-  /// Index into the draft, for reorder and remove. -1 when the row isn't editable, which is
-  /// safe because every path that uses it is behind `canReorder` or `editable`.
+  /**
+   * Index into the draft, for reorder and remove. -1 when the row isn't editable, which is
+   * safe because every path that uses it is behind `canReorder` or `editable`.
+   */
   index: number;
 
-  /// Dragging is only offered in the official order — reordering a sorted view would move a
-  /// track to a position the user isn't looking at.
+  /**
+   * Dragging is only offered in the official order — reordering a sorted view would move a
+   * track to a position the user isn't looking at.
+   */
   canReorder: boolean;
-  /// This row is what a drag is currently hovering over.
+  /** This row is what a drag is currently hovering over. */
   isDropTarget: boolean;
 
   isPlaying: boolean;
-  /// Playing *and* not paused, which is what animates the equaliser rather than freezing it.
+  /** Playing *and* not paused, which is what animates the equaliser rather than freezing it. */
   playingActive: boolean;
-  /// Briefly highlighted — the row was just jumped to from a song search.
+  /** Briefly highlighted — the row was just jumped to from a song search. */
   isFlashing: boolean;
 
-  /// Audio features for this track, or undefined if none were found.
+  /** Audio features for this track, or undefined if none were found. */
   feature: Features | undefined;
-  /// Set when the track stands out from the playlist average. Suppressed while a goal is set,
-  /// since the goal chips answer the same question against a target the user chose.
+  /**
+   * Set when the track stands out from the playlist average. Suppressed while a goal is set,
+   * since the goal chips answer the same question against a target the user chose.
+   */
   outlier: Outlier | undefined;
-  /// Dimensions this track misses the playlist's mood goal on, worst first.
+  /** Dimensions this track misses the playlist's mood goal on, worst first. */
   goalOff: GoalDeviation[] | undefined;
-  /// A feature fetch for this track is still in flight, so an empty cell means "waiting"
-  /// rather than "nothing to show".
+  /**
+   * A feature fetch for this track is still in flight, so an empty cell means "waiting"
+   * rather than "nothing to show".
+   */
   stillAnalyzing: boolean;
 
   metricsOpen: boolean;
   cols: FeatureKey[];
 
-  /// Reorder. The row writes its own drag payload; the host only needs the index.
+  /** Reorder. The row writes its own drag payload; the host only needs the index. */
   onDragStart: (index: number) => void;
   onDragEnter: (index: number) => void;
   onDragLeave: (index: number) => void;
@@ -65,15 +77,17 @@ export interface TrackRowProps {
   onRemove: (index: number) => void;
 }
 
-/// One row of the track list, in both modes. Editable (`status === "normal"`) it has the drag
-/// grip and the remove button; in diff mode it is read-only with add/remove/move styling.
-/// Every branch keeps the same grid cells, so the columns stay aligned between the two.
-///
-/// Deliberately presentational: every value it shows is computed by the host and handed over,
-/// so the row itself holds no state and reads top to bottom. Not wrapped in `memo` — the
-/// handlers below close over the draft and change on every edit anyway, so memoizing would
-/// cost a comparison per row and skip nothing. Worth revisiting only alongside stable
-/// callbacks, and only if a long playlist actually feels slow.
+/**
+ * One row of the track list, in both modes. Editable (`status === "normal"`) it has the drag
+ * grip and the remove button; in diff mode it is read-only with add/remove/move styling.
+ * Every branch keeps the same grid cells, so the columns stay aligned between the two.
+ *
+ * Deliberately presentational: every value it shows is computed by the host and handed over,
+ * so the row itself holds no state and reads top to bottom. Not wrapped in `memo` — the
+ * handlers below close over the draft and change on every edit anyway, so memoizing would
+ * cost a comparison per row and skip nothing. Worth revisiting only alongside stable
+ * callbacks, and only if a long playlist actually feels slow.
+ */
 export default function TrackRow({
   track,
   status,

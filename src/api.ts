@@ -298,8 +298,10 @@ export const api = {
   trackFeatures: (tracks: TrackEntry[]) =>
     invoke<Record<string, Features>>("track_features", { tracks }),
 
-  /// The only Spotify token that ever crosses into the webview, and it carries the
-  /// streaming scopes alone — see `ensure_streaming_token` in src-tauri.
+  /**
+   * The only Spotify token that ever crosses into the webview, and it carries the
+   * streaming scopes alone — see `ensure_streaming_token` in src-tauri.
+   */
   getStreamingToken: () => invoke<string>("get_streaming_token"),
   playerPlay: (
     deviceId: string,

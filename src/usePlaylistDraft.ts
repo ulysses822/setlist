@@ -22,87 +22,107 @@ import {
 import { bareId } from "./metricsCalc";
 import * as prefs from "./prefs";
 
-/// A message for the host's status line. Lives here because this is where most of them are
-/// raised.
+/**
+ * A message for the host's status line. Lives here because this is where most of them are
+ * raised.
+ */
 export type Status = { kind: "ok" | "warn" | "err"; msg: string } | null;
 
-/// Which long-running draft operation is in flight. The sidebar's own list load is tracked
-/// separately by the host — it can overlap these, and clearing one must not clear the other.
+/**
+ * Which long-running draft operation is in flight. The sidebar's own list load is tracked
+ * separately by the host — it can overlap these, and clearing one must not clear the other.
+ */
 export type DraftBusy = "open" | "save" | "push" | null;
 
-/// What the draft lifecycle needs from the component hosting it.
+/** What the draft lifecycle needs from the component hosting it. */
 export interface DraftHost {
-  /// True while Spotify's rate limit is in force: the background drift check is skipped
-  /// rather than issuing a call that would fail and extend the cooldown.
+  /**
+   * True while Spotify's rate limit is in force: the background drift check is skipped
+   * rather than issuing a call that would fail and extend the cooldown.
+   */
   blocked: boolean;
   confirm: (message: string, confirmLabel: string) => Promise<boolean>;
   onStatus: (status: Status) => void;
-  /// Staged edits changed. Cheap: staging writes only to the gitignored `staged/` directory,
-  /// so the sidebar's modified dot moves but the data repo hasn't.
+  /**
+   * Staged edits changed. Cheap: staging writes only to the gitignored `staged/` directory,
+   * so the sidebar's modified dot moves but the data repo hasn't.
+   */
   onPlaylistsChanged: () => void;
-  /// A playlist file itself changed, so the data-repo chip needs re-reading too.
+  /** A playlist file itself changed, so the data-repo chip needs re-reading too. */
   onLibraryChanged: () => void;
-  /// A load is starting — clear host state that shouldn't outlive the previous playlist,
-  /// and point the per-playlist view choices at `file`.
+  /**
+   * A load is starting — clear host state that shouldn't outlive the previous playlist,
+   * and point the per-playlist view choices at `file`.
+   */
   onOpening: (file: string) => void;
-  /// A track list arrived (from an open, a pull, or a revert): a chance to fetch whatever
-  /// audio features it needs. Separate from `onOpened` because a pull and a revert replace
-  /// the tracks without being an "open".
+  /**
+   * A track list arrived (from an open, a pull, or a revert): a chance to fetch whatever
+   * audio features it needs. Separate from `onOpened` because a pull and a revert replace
+   * the tracks without being an "open".
+   */
   onTracksLoaded: (tracks: TrackEntry[]) => void;
-  /// A playlist finished loading into the editor: reset the host's per-playlist view state,
-  /// and scroll to `focusTrackId` if the open came from a song search.
+  /**
+   * A playlist finished loading into the editor: reset the host's per-playlist view state,
+   * and scroll to `focusTrackId` if the open came from a song search.
+   */
   onOpened: (focusTrackId?: string) => void;
 }
 
 export interface PlaylistDraft {
-  /// File name of the open playlist, or null when none is open.
+  /** File name of the open playlist, or null when none is open. */
   selected: string | null;
-  /// The playlist being edited: the staged edit if one existed, else the Spotify mirror.
+  /** The playlist being edited: the staged edit if one existed, else the Spotify mirror. */
   draft: PlaylistFile | null;
-  /// The mirror's track order, which the inline diff compares against.
+  /** The mirror's track order, which the inline diff compares against. */
   baseline: TrackEntry[];
-  /// In-memory edits not yet written to the staged file.
+  /** In-memory edits not yet written to the staged file. */
   dirty: boolean;
-  /// Saved to the staged file, but not yet pushed to Spotify.
+  /** Saved to the staged file, but not yet pushed to Spotify. */
   staged: boolean;
   busy: DraftBusy;
-  /// Set when Spotify changed since the last sync — drives the drift banner.
+  /** Set when Spotify changed since the last sync — drives the drift banner. */
   sync: SyncStatus | null;
-  /// Set when a push was refused because of that drift — drives the conflict modal.
+  /** Set when a push was refused because of that drift — drives the conflict modal. */
   conflict: SyncStatus | null;
   dismissConflict: () => void;
-  /// Dismiss the "Spotify changed since your last sync" banner without acting on it.
+  /** Dismiss the "Spotify changed since your last sync" banner without acting on it. */
   dismissSync: () => void;
-  /// Clear the editor because the open playlist no longer exists (it was deleted).
+  /** Clear the editor because the open playlist no longer exists (it was deleted). */
   closeDeleted: () => void;
   showDiff: boolean;
   setShowDiff: Dispatch<SetStateAction<boolean>>;
 
-  /// Named `openPlaylist`, not `open`, and it has to stay that way. Library destructures
-  /// this interface into bare names; `open` collides with `window.open`, whose signature
-  /// `(url?: string, target?: string)` happily accepts `open(file, trackId)`. Leave it off the
-  /// destructuring list and every call site type-checks, builds, and opens a popup instead of
-  /// a playlist — which is exactly what shipped once.
+  /**
+   * Named `openPlaylist`, not `open`, and it has to stay that way. Library destructures
+   * this interface into bare names; `open` collides with `window.open`, whose signature
+   * `(url?: string, target?: string)` happily accepts `open(file, trackId)`. Leave it off the
+   * destructuring list and every call site type-checks, builds, and opens a popup instead of
+   * a playlist — which is exactly what shipped once.
+   */
   openPlaylist: (file: string, focusTrackId?: string) => Promise<void>;
-  /// Replace the local copy with Spotify's, discarding local edits (asks first).
+  /** Replace the local copy with Spotify's, discarding local edits (asks first). */
   pullRemote: () => Promise<void>;
-  /// Drop unsaved edits and reload the last saved version (asks first).
+  /** Drop unsaved edits and reload the last saved version (asks first). */
   revert: () => Promise<void>;
-  /// Write the in-memory edits to the staged file.
+  /** Write the in-memory edits to the staged file. */
   save: () => Promise<void>;
-  /// Push to Spotify, refusing on drift (asks first).
+  /** Push to Spotify, refusing on drift (asks first). */
   push: () => Promise<void>;
-  /// Push again with the user's chosen resolution after a conflict.
+  /** Push again with the user's chosen resolution after a conflict. */
   resolveConflict: (strategy: PushStrategy) => Promise<void>;
-  /// Stage whatever is in memory before the host navigates away. False if it couldn't be
-  /// written — the caller should stay put rather than lose the edits.
+  /**
+   * Stage whatever is in memory before the host navigates away. False if it couldn't be
+   * written — the caller should stay put rather than lose the edits.
+   */
   flush: () => Promise<boolean>;
 
   edit: (tracks: TrackEntry[]) => void;
   setMeta: (patch: Partial<Pick<PlaylistFile, "name" | "description">>) => void;
-  /// Adopt a track list that was staged behind the editor's back — the cross-playlist
-  /// duplicate normalizer writes the open playlist's staged file directly, and without this
-  /// the next Save would push the stale in-memory list back over it.
+  /**
+   * Adopt a track list that was staged behind the editor's back — the cross-playlist
+   * duplicate normalizer writes the open playlist's staged file directly, and without this
+   * the next Save would push the stale in-memory list back over it.
+   */
   adoptStaged: (tracks: TrackEntry[]) => void;
 }
 

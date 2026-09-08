@@ -23,11 +23,15 @@ export interface PlaybackState {
   position: number;
   duration: number;
   cover: string | null;
-  /// The context playback was started from ("spotify:playlist:…") — used to mark the
-  /// playing playlist in the sidebar. Null for context-less playback (explicit uris).
+  /**
+   * The context playback was started from ("spotify:playlist:…") — used to mark the
+   * playing playlist in the sidebar. Null for context-less playback (explicit uris).
+   */
   contextUri: string | null;
-  /// Original (pre-relink) uri when Spotify substituted a market-specific equivalent.
-  /// Playlist files store the original form, so row highlighting matches against both.
+  /**
+   * Original (pre-relink) uri when Spotify substituted a market-specific equivalent.
+   * Playlist files store the original form, so row highlighting matches against both.
+   */
   linkedFromUri: string | null;
 }
 
@@ -59,9 +63,11 @@ export interface PlayerApi {
 const Ctx = createContext<PlayerApi | null>(null);
 export const usePlayer = () => useContext(Ctx);
 
-/// The slow-changing subset of PlaybackState that list views need to mark the playing
-/// row. Unlike PlayerApi, its identity survives the once-a-second position tick, so
-/// subscribers only re-render on track change or pause/resume.
+/**
+ * The slow-changing subset of PlaybackState that list views need to mark the playing
+ * row. Unlike PlayerApi, its identity survives the once-a-second position tick, so
+ * subscribers only re-render on track change or pause/resume.
+ */
 export interface NowPlaying {
   trackName: string;
   uri: string;
@@ -117,8 +123,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     setRemote(r);
   }
 
-  /// Fold a /me/player snapshot into the bar. Decides whether playback is local
-  /// (SDK listener owns the state) or remote (we own it from these polls).
+  /**
+   * Fold a /me/player snapshot into the bar. Decides whether playback is local
+   * (SDK listener owns the state) or remote (we own it from these polls).
+   */
   function applyRemoteState(rp: RemotePlayback | null) {
     if (!rp) {
       // No active session anywhere; if we were following a remote one, let the bar close.
@@ -330,8 +338,10 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
 
   // Stable identity (only refs and setters inside) — it's part of the now-playing
   // context value, which must not churn with the position tick.
-  /// Say why nothing is going to play. `deviceRef` being empty can't tell these apart, and
-  /// they ask completely different things of the reader, so find out before answering.
+  /**
+   * Say why nothing is going to play. `deviceRef` being empty can't tell these apart, and
+   * they ask completely different things of the reader, so find out before answering.
+   */
   const explainSilence = useCallback(async () => {
     // A real SDK failure — no Premium, a bad init — is already the whole answer.
     if (errorRef.current) return;
@@ -385,10 +395,12 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
     void playerRef.current?.setVolume?.(v);
   }, []);
 
-  /// Answer a token request the SDK is still waiting on. Called after a successful login:
-  /// the grant it needs may have only just come into existence, and the SDK will not ask
-  /// again by itself. Without this the player stays dead until the app is restarted, which
-  /// nothing in the UI would ever tell you to do.
+  /**
+   * Answer a token request the SDK is still waiting on. Called after a successful login:
+   * the grant it needs may have only just come into existence, and the SDK will not ask
+   * again by itself. Without this the player stays dead until the app is restarted, which
+   * nothing in the UI would ever tell you to do.
+   */
   const retryToken = useCallback(() => {
     const cb = pendingTokenCb.current;
     if (!cb) return; // nothing waiting: either it never failed, or it's already answered

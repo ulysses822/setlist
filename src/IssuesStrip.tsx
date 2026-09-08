@@ -4,20 +4,24 @@ import { type Doctor } from "./usePlaylistDoctor";
 
 export interface IssuesStripProps {
   doctor: Doctor;
-  /// Spotify's rate limit is in force, so the replacement search can't run. Passed separately
-  /// from the doctor because it's the host's notion of the app being paused, not the
-  /// playlist's condition.
+  /**
+   * Spotify's rate limit is in force, so the replacement search can't run. Passed separately
+   * from the doctor because it's the host's notion of the app being paused, not the
+   * playlist's condition.
+   */
   blocked: boolean;
 }
 
-/// The per-playlist cleanup panel: what the doctor found, and a button for each fix.
-///
-/// Collapsed to a one-line count until opened, because on a clean playlist it shouldn't be
-/// there at all and on a messy one it is long. Every fix goes to the draft — nothing here
-/// writes to Spotify, which is what makes it safe to offer one-click buttons for.
-///
-/// The host decides whether to render it at all (it is hidden in diff mode, where the list on
-/// screen is a comparison rather than something you can edit).
+/**
+ * The per-playlist cleanup panel: what the doctor found, and a button for each fix.
+ *
+ * Collapsed to a one-line count until opened, because on a clean playlist it shouldn't be
+ * there at all and on a messy one it is long. Every fix goes to the draft — nothing here
+ * writes to Spotify, which is what makes it safe to offer one-click buttons for.
+ *
+ * The host decides whether to render it at all (it is hidden in diff mode, where the list on
+ * screen is a comparison rather than something you can edit).
+ */
 export default function IssuesStrip({ doctor, blocked }: IssuesStripProps) {
   const { lint, count, open, toggle, replaceState } = doctor;
 

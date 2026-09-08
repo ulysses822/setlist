@@ -20,18 +20,22 @@ import type { Status } from "./usePlaylistDraft";
 
 export interface PlaylistLibrary {
   playlists: LocalPlaylist[];
-  /// The sidebar's own load. Deliberately separate from the draft's `busy`: a list refresh
-  /// can overlap a save or a push, and clearing one must not clear the other.
+  /**
+   * The sidebar's own load. Deliberately separate from the draft's `busy`: a list refresh
+   * can overlap a save or a push, and clearing one must not clear the other.
+   */
   listBusy: boolean;
-  /// Files of every archived playlist, for the overlay's badges.
+  /** Files of every archived playlist, for the overlay's badges. */
   archivedFiles: Set<string>;
-  /// Re-read the sidebar, reporting a failure rather than leaving a stale list looking
-  /// authoritative — after a create or a delete, a silently stale sidebar is one the user is
-  /// about to act on.
-  ///
-  /// `alsoGit` re-reads the data-repo chip too, which costs a `git status` subprocess. Worth it
-  /// whenever a playlist file changed; wasted when only a staged draft did, since staging
-  /// writes to the gitignored `staged/` directory and leaves the repo untouched.
+  /**
+   * Re-read the sidebar, reporting a failure rather than leaving a stale list looking
+   * authoritative — after a create or a delete, a silently stale sidebar is one the user is
+   * about to act on.
+   *
+   * `alsoGit` re-reads the data-repo chip too, which costs a `git status` subprocess. Worth it
+   * whenever a playlist file changed; wasted when only a staged draft did, since staging
+   * writes to the gitignored `staged/` directory and leaves the repo untouched.
+   */
   reload: (alsoGit?: boolean) => Promise<void>;
 
   togglePin: (p: LocalPlaylist) => Promise<void>;
@@ -42,25 +46,27 @@ export interface PlaylistLibrary {
   createOpen: boolean;
   setCreateOpen: Dispatch<SetStateAction<boolean>>;
   creating: boolean;
-  /// Create, reload, and hand back the new playlist so the caller can open it. Null on failure
-  /// (already reported through `onStatus`) or on an empty name.
+  /**
+   * Create, reload, and hand back the new playlist so the caller can open it. Null on failure
+   * (already reported through `onStatus`) or on an empty name.
+   */
   create: (name: string, description: string) => Promise<LocalPlaylist | null>;
 
   deleteTarget: LocalPlaylist | null;
   setDeleteTarget: Dispatch<SetStateAction<LocalPlaylist | null>>;
   deleting: boolean;
-  /// Delete whatever `deleteTarget` points at, then reload.
+  /** Delete whatever `deleteTarget` points at, then reload. */
   remove: () => Promise<void>;
 }
 
 export interface PlaylistLibraryOptions {
-  /// Every operation reports through here — the caller owns the message line.
+  /** Every operation reports through here — the caller owns the message line. */
   onStatus: (s: Status) => void;
-  /// In-app confirm (see Library's ConfirmModal). Only `unfollowArchivedAll` asks.
+  /** In-app confirm (see Library's ConfirmModal). Only `unfollowArchivedAll` asks. */
   confirm: (message: string, confirmLabel?: string) => Promise<boolean>;
-  /// Re-read the data repo's status. A list reload can follow a change git should see.
+  /** Re-read the data repo's status. A list reload can follow a change git should see. */
   refreshGit: () => void;
-  /// Called with the file that was just deleted, so the caller can close it if it was open.
+  /** Called with the file that was just deleted, so the caller can close it if it was open. */
   onDeleted: (file: string) => void;
 }
 

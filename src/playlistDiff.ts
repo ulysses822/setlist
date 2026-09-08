@@ -92,8 +92,10 @@ function simpleDiff(baseline: TrackEntry[], draft: TrackEntry[]): PlaylistDiff {
   return { rows, added, removed, moved: 0, changed: added + removed > 0 };
 }
 
-/// Compute the inline diff. `baseline` is the canonical (last-synced) order; `draft` is the
-/// current edited order.
+/**
+ * Compute the inline diff. `baseline` is the canonical (last-synced) order; `draft` is the
+ * current edited order.
+ */
 export function diffTracks(baseline: TrackEntry[], draft: TrackEntry[]): PlaylistDiff {
   if (baseline.length * draft.length > 2_000_000) {
     return simpleDiff(baseline, draft);

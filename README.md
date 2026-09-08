@@ -27,12 +27,12 @@ against Spotify.](docs/screenshots/library.png)
   choose safe, merge, or overwrite.
 - Edits that cancel out clean themselves up: add a song, remove it again, and the
   playlist is simply *unmodified* — no phantom "unsaved changes".
-- One-click **revert** to the last synced state, any time.
+- **Revert** to the last synced state, any time.
 
 ### Keep the library clean
 - The **cleanup doctor** scans everything: exact duplicates, near-duplicates (the same
-  recording under different release IDs), including across playlists — with one-click,
-  reviewable fixes that never write to Spotify behind your back.
+  recording under different release IDs), including across playlists — with reviewable
+  fixes that never write to Spotify behind your back.
 - **Unavailable tracks** (greyed out in your region, removed from the catalog) are
   flagged, and Setlist suggests a playable identical replacement from your own library
   or Spotify search.

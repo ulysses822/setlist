@@ -32,19 +32,21 @@ import {
 import * as prefs from "./prefs";
 
 export interface PlaylistMetrics {
-  /// Cached features for every track seen this session, keyed by bare Spotify id. Exposed
-  /// (with its setter) because the similarity map fetches library-wide features and folds
-  /// them in here so the editor doesn't re-fetch them.
+  /**
+   * Cached features for every track seen this session, keyed by bare Spotify id. Exposed
+   * (with its setter) because the similarity map fetches library-wide features and folds
+   * them in here so the editor doesn't re-fetch them.
+   */
   featureMap: Record<string, Features>;
   setFeatureMap: Dispatch<SetStateAction<Record<string, Features>>>;
   featureOf: (t: TrackEntry) => Features | undefined;
-  /// Fetch features for any of `tracks` we don't already have or aren't already fetching.
+  /** Fetch features for any of `tracks` we don't already have or aren't already fetching. */
   loadFeatures: (tracks: TrackEntry[]) => void;
-  /// Track ids with a fetch in flight.
+  /** Track ids with a fetch in flight. */
   analyzing: Set<string>;
-  /// True while any track in the open playlist is still being fetched.
+  /** True while any track in the open playlist is still being fetched. */
   metricsLoading: boolean;
-  /// True only once that fetch has been slow enough to be worth mentioning (see below).
+  /** True only once that fetch has been slow enough to be worth mentioning (see below). */
   showAnalyzing: boolean;
 
   metricsOpen: boolean;
@@ -56,8 +58,10 @@ export interface PlaylistMetrics {
 
   aggregates: Aggregates | null;
   outliers: Map<string, Outlier>;
-  /// The method actually used — `computeOutliersByMode` falls back to the independent method
-  /// when there are too few analyzed tracks to trust a covariance.
+  /**
+   * The method actually used — `computeOutliersByMode` falls back to the independent method
+   * when there are too few analyzed tracks to trust a covariance.
+   */
   outlierEffective: OutlierMode;
   outlierMode: OutlierMode;
   setOutlierMode: (mode: OutlierMode) => void;
@@ -66,14 +70,18 @@ export interface PlaylistMetrics {
   goalDeviations: Map<string, GoalDeviation[]>;
   goalControl: GoalControl;
 
-  /// Point the per-playlist view choices at `file`'s saved columns and goal. Called when a
-  /// playlist is opened; leaves the feature cache alone.
+  /**
+   * Point the per-playlist view choices at `file`'s saved columns and goal. Called when a
+   * playlist is opened; leaves the feature cache alone.
+   */
   resetFor: (file: string) => void;
 }
 
-/// `tracks` is the open playlist's *draft* track list, or null when no playlist is open —
-/// the distinction matters, since "no playlist" and "an empty playlist" produce different
-/// aggregates (null vs. a zeroed set).
+/**
+ * `tracks` is the open playlist's *draft* track list, or null when no playlist is open —
+ * the distinction matters, since "no playlist" and "an empty playlist" produce different
+ * aggregates (null vs. a zeroed set).
+ */
 export function usePlaylistMetrics(
   selected: string | null,
   tracks: TrackEntry[] | null

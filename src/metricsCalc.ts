@@ -8,9 +8,11 @@
 
 import type { Features, TrackEntry } from "./api";
 
-/// One playlist's rolled-up feature numbers. Defined here rather than in api.ts because no
-/// Tauri command returns it — the backend fetches per-track features and stops; every average
-/// below is computed in this file.
+/**
+ * One playlist's rolled-up feature numbers. Defined here rather than in api.ts because no
+ * Tauri command returns it — the backend fetches per-track features and stops; every average
+ * below is computed in this file.
+ */
 export interface Aggregates {
   total: number;
   analyzed: number;
@@ -68,7 +70,7 @@ export const FEATURE_META: {
   { key: "tempo", short: "BPM", label: "Tempo (BPM)" },
 ];
 
-/// Format one feature value for a track cell: BPM rounded, everything else a percentage.
+/** Format one feature value for a track cell: BPM rounded, everything else a percentage. */
 export function fmtFeature(f: Features | undefined, key: FeatureKey): string {
   if (!f) return "";
   return key === "tempo"
@@ -97,43 +99,53 @@ export const MIN_FOR_MULTI = 20;
 // effective dof can be anywhere from 2 to FEATURE_KEYS.length.
 const CHI2_95 = [0, 3.841, 5.991, 7.815, 9.488, 11.07, 12.592, 14.067, 15.507];
 
-/// One dimension's share of a multivariate outlier's distance (shares sum to ≤1; only
-/// meaningfully-positive contributors are kept).
+/**
+ * One dimension's share of a multivariate outlier's distance (shares sum to ≤1; only
+ * meaningfully-positive contributors are kept).
+ */
 export type Contributor = { feature: string; dir: "up" | "down"; share: number };
 
 export type Outlier = {
   feature: string;
   dir: "up" | "down";
-  /// independent: the z-score on `feature`. multivariate: the Mahalanobis distance, with
-  /// `feature`/`dir` describing the top contributor.
+  /**
+   * independent: the z-score on `feature`. multivariate: the Mahalanobis distance, with
+   * `feature`/`dir` describing the top contributor.
+   */
   z: number;
   method: OutlierMode;
-  /// Multivariate only: which dimensions drive the distance, worst first.
+  /** Multivariate only: which dimensions drive the distance, worst first. */
   contributors?: Contributor[];
 };
 
 export type FeatureLookup = (track: TrackEntry) => Features | undefined;
 
-/// "spotify:track:ABC" -> "ABC"; also tolerates a bare id. Matches bare_id in metrics.rs.
-/// Local files (spotify:local:Artist:Album:Title:Duration) have no track id — their last
-/// colon-segment is the duration, which collides across unrelated songs — so the whole URI
-/// is their identity.
+/**
+ * "spotify:track:ABC" -> "ABC"; also tolerates a bare id. Matches bare_id in metrics.rs.
+ * Local files (spotify:local:Artist:Album:Title:Duration) have no track id — their last
+ * colon-segment is the duration, which collides across unrelated songs — so the whole URI
+ * is their identity.
+ */
 export function bareId(uri: string): string {
   if (uri.startsWith("spotify:local:")) return uri;
   const i = uri.lastIndexOf(":");
   return i === -1 ? uri : uri.slice(i + 1);
 }
 
-/// Local files added to a playlist on Spotify have a `spotify:local:…` uri. They can't be
-/// played through the Web API / Web Playback SDK (only in the official client, on the machine
-/// that has the file), so we treat them specially.
+/**
+ * Local files added to a playlist on Spotify have a `spotify:local:…` uri. They can't be
+ * played through the Web API / Web Playback SDK (only in the official client, on the machine
+ * that has the file), so we treat them specially.
+ */
 export function isLocalTrack(id: string): boolean {
   return id.startsWith("spotify:local:");
 }
 
-/// Playlist-level summary: the mean of each tracked dimension over the tracks that have
-/// features (unanalyzed ones count toward `total` and the duration but not the averages,
-/// which are null until at least one track resolves).
+/**
+ * Playlist-level summary: the mean of each tracked dimension over the tracks that have
+ * features (unanalyzed ones count toward `total` and the duration but not the averages,
+ * which are null until at least one track resolves).
+ */
 export function computeAggregates(
   tracks: TrackEntry[],
   feat: FeatureLookup
@@ -189,8 +201,10 @@ export function computeAggregates(
   return agg;
 }
 
-/// Per-track outliers, keyed by track id: the most-deviating dimension (in std devs)
-/// vs the playlist mean. Empty until at least MIN_FOR_OUTLIERS tracks are analyzed.
+/**
+ * Per-track outliers, keyed by track id: the most-deviating dimension (in std devs)
+ * vs the playlist mean. Empty until at least MIN_FOR_OUTLIERS tracks are analyzed.
+ */
 export function computeOutliers(
   tracks: TrackEntry[],
   feat: FeatureLookup
@@ -227,8 +241,10 @@ export function computeOutliers(
 
 // --- Multivariate (Mahalanobis) outlier detection ---
 
-/// Cholesky factorization A = L·Lᵀ for a symmetric positive-definite matrix.
-/// Returns null when A isn't positive-definite (singular/degenerate covariance).
+/**
+ * Cholesky factorization A = L·Lᵀ for a symmetric positive-definite matrix.
+ * Returns null when A isn't positive-definite (singular/degenerate covariance).
+ */
 function cholesky(a: number[][]): number[][] | null {
   const n = a.length;
   const l: number[][] = Array.from({ length: n }, () => new Array(n).fill(0));
@@ -247,7 +263,7 @@ function cholesky(a: number[][]): number[][] | null {
   return l;
 }
 
-/// Solve (L·Lᵀ)·y = b via forward then back substitution.
+/** Solve (L·Lᵀ)·y = b via forward then back substitution. */
 function choleskySolve(l: number[][], b: number[]): number[] {
   const n = l.length;
   const w = new Array<number>(n);
@@ -265,17 +281,19 @@ function choleskySolve(l: number[][], b: number[]): number[] {
   return y;
 }
 
-/// Joint-distribution outliers: model the analyzed tracks as a multivariate normal
-/// (mean vector + shrunk covariance matrix) and flag tracks whose squared Mahalanobis
-/// distance exceeds the chi-square 95% critical value. Unlike the per-metric method,
-/// this respects correlations between metrics — a track can be flagged for an unusual
-/// *combination* (e.g. high energy AND high acousticness in a playlist where those
-/// normally move opposite) even when every individual metric is within 2σ.
-///
-/// Returns null when there isn't enough data to estimate the joint distribution
-/// (fewer than MIN_FOR_MULTI analyzed tracks, or fewer than 2 dimensions with real
-/// spread, or a degenerate covariance) — callers should fall back to the independent
-/// method in that case.
+/**
+ * Joint-distribution outliers: model the analyzed tracks as a multivariate normal
+ * (mean vector + shrunk covariance matrix) and flag tracks whose squared Mahalanobis
+ * distance exceeds the chi-square 95% critical value. Unlike the per-metric method,
+ * this respects correlations between metrics — a track can be flagged for an unusual
+ * *combination* (e.g. high energy AND high acousticness in a playlist where those
+ * normally move opposite) even when every individual metric is within 2σ.
+ *
+ * Returns null when there isn't enough data to estimate the joint distribution
+ * (fewer than MIN_FOR_MULTI analyzed tracks, or fewer than 2 dimensions with real
+ * spread, or a degenerate covariance) — callers should fall back to the independent
+ * method in that case.
+ */
 export function computeOutliersMulti(
   tracks: TrackEntry[],
   feat: FeatureLookup
@@ -369,9 +387,11 @@ export function computeOutliersMulti(
   return map;
 }
 
-/// Outliers using the requested mode, with automatic fallback: multivariate needs enough
-/// analyzed tracks to estimate a covariance, otherwise the independent method is used.
-/// `effective` reports which method actually ran (so the UI can say so).
+/**
+ * Outliers using the requested mode, with automatic fallback: multivariate needs enough
+ * analyzed tracks to estimate a covariance, otherwise the independent method is used.
+ * `effective` reports which method actually ran (so the UI can say so).
+ */
 export function computeOutliersByMode(
   mode: OutlierMode,
   tracks: TrackEntry[],
@@ -405,8 +425,10 @@ export const GOAL_THRESHOLD = 0.2;
 
 export type GoalDeviation = { feature: GoalDim; dir: "up" | "down"; diff: number };
 
-/// Per-track deviations from the goal, keyed by track id: every dimension that's off by more
-/// than `threshold`, worst first. Tracks within tolerance (or without features) are absent.
+/**
+ * Per-track deviations from the goal, keyed by track id: every dimension that's off by more
+ * than `threshold`, worst first. Tracks within tolerance (or without features) are absent.
+ */
 export function computeGoalDeviations(
   tracks: TrackEntry[],
   feat: FeatureLookup,
@@ -438,8 +460,10 @@ export function computeGoalDeviations(
 // enough fingerprint to place on the map; below it the average is noise.
 export const PCA_MIN_ANALYZED = 5;
 
-/// A playlist's mean feature vector in FEATURE_KEYS order, or null if nothing was analyzed
-/// (or, defensively, if any dimension is missing). Built from the same aggregates the radar uses.
+/**
+ * A playlist's mean feature vector in FEATURE_KEYS order, or null if nothing was analyzed
+ * (or, defensively, if any dimension is missing). Built from the same aggregates the radar uses.
+ */
 export function playlistVector(agg: Aggregates): number[] | null {
   if (agg.analyzed === 0) return null;
   const v = [
@@ -455,34 +479,42 @@ export function playlistVector(agg: Aggregates): number[] | null {
   return v.every((x) => x != null) ? v : null;
 }
 
-/// One feature's contribution to a principal axis (the standardized-space loading). The view
-/// turns the top few into a human axis label like "energy ↑ · acousticness ↓".
+/**
+ * One feature's contribution to a principal axis (the standardized-space loading). The view
+ * turns the top few into a human axis label like "energy ↑ · acousticness ↓".
+ */
 export type AxisLoading = { feature: string; weight: number };
 
-/// A fitted PCA projection that can be frozen and reused: it carries everything needed to map
-/// any playlist's mean-vector to the same 2D spot, so the map only re-lays-out when the user
-/// explicitly re-fits it (see `fitPca` / `projectPca`).
+/**
+ * A fitted PCA projection that can be frozen and reused: it carries everything needed to map
+ * any playlist's mean-vector to the same 2D spot, so the map only re-lays-out when the user
+ * explicitly re-fits it (see `fitPca` / `projectPca`).
+ */
 export type PcaBasis = {
-  /// Indices into FEATURE_KEYS for the dimensions kept (those with variance at fit time).
+  /** Indices into FEATURE_KEYS for the dimensions kept (those with variance at fit time). */
   kept: number[];
-  /// Z-score standardization params for the kept dimensions, aligned to `kept`.
+  /** Z-score standardization params for the kept dimensions, aligned to `kept`. */
   means: number[];
   stds: number[];
-  /// The two principal axes (loadings over the kept dimensions), sign-canonicalized.
+  /** The two principal axes (loadings over the kept dimensions), sign-canonicalized. */
   v1: number[];
   v2: number[];
-  /// Share of total variance the two axes capture (0..1) — how faithful the 2D map is.
+  /** Share of total variance the two axes capture (0..1) — how faithful the 2D map is. */
   varExplained: number;
-  /// Per-axis feature loadings, sorted by |weight| desc, for labelling the axes.
+  /** Per-axis feature loadings, sorted by |weight| desc, for labelling the axes. */
   axes: { pc1: AxisLoading[]; pc2: AxisLoading[] };
-  /// Fixed per-axis canvas-normalization bounds (robust 8th–92nd percentile of the fit set's
-  /// projected coords). Frozen here so re-projecting an edited or brand-new playlist maps
-  /// through the same scale instead of rescaling the whole map.
+  /**
+   * Fixed per-axis canvas-normalization bounds (robust 8th–92nd percentile of the fit set's
+   * projected coords). Frozen here so re-projecting an edited or brand-new playlist maps
+   * through the same scale instead of rescaling the whole map.
+   */
   norm: { x: { lo: number; span: number }; y: { lo: number; span: number } };
 };
 
-/// Eigenvalues + eigenvectors of a small symmetric matrix via cyclic Jacobi rotations.
-/// `vectors[i][k]` is component i of eigenvector k (columns are eigenvectors).
+/**
+ * Eigenvalues + eigenvectors of a small symmetric matrix via cyclic Jacobi rotations.
+ * `vectors[i][k]` is component i of eigenvector k (columns are eigenvectors).
+ */
 function jacobiEigen(input: number[][]): { values: number[]; vectors: number[][] } {
   const n = input.length;
   const a = input.map((r) => r.slice());
@@ -525,7 +557,7 @@ function jacobiEigen(input: number[][]): { values: number[]; vectors: number[][]
   return { values: a.map((row, i) => row[i]), vectors: v };
 }
 
-/// Quantile of an already-sorted array (linear interpolation between neighbours).
+/** Quantile of an already-sorted array (linear interpolation between neighbours). */
 function sortedQuantile(sorted: number[], q: number): number {
   if (sorted.length === 0) return 0;
   if (sorted.length === 1) return sorted[0];
@@ -535,8 +567,10 @@ function sortedQuantile(sorted: number[], q: number): number {
   return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
 }
 
-/// Robust per-axis bounds (8th–92nd percentile) so a couple of outliers can't squash the bulk
-/// of the map into a blob.
+/**
+ * Robust per-axis bounds (8th–92nd percentile) so a couple of outliers can't squash the bulk
+ * of the map into a blob.
+ */
 function axisBounds(vals: number[]): { lo: number; span: number } {
   const s = [...vals].sort((a, b) => a - b);
   const lo = sortedQuantile(s, 0.08);
@@ -544,12 +578,14 @@ function axisBounds(vals: number[]): { lo: number; span: number } {
   return { lo, span: Math.max(hi - lo, 1e-6) };
 }
 
-/// Fit a 2D PCA projection from playlist mean-vectors (each in FEATURE_KEYS order). Standardizes
-/// every feature first (z-score across playlists) so disparate scales — tempo's BPM vs the
-/// 0–1 moods — contribute comparably; that's what makes on-screen distance read as "how
-/// different these playlists are". Returns null when there isn't enough to form a 2D spread
-/// (< 3 playlists, or < 2 features with any variance). The returned basis can be frozen and
-/// fed to `projectPca`, so editing a playlist moves only that point rather than re-fitting.
+/**
+ * Fit a 2D PCA projection from playlist mean-vectors (each in FEATURE_KEYS order). Standardizes
+ * every feature first (z-score across playlists) so disparate scales — tempo's BPM vs the
+ * 0–1 moods — contribute comparably; that's what makes on-screen distance read as "how
+ * different these playlists are". Returns null when there isn't enough to form a 2D spread
+ * (< 3 playlists, or < 2 features with any variance). The returned basis can be frozen and
+ * fed to `projectPca`, so editing a playlist moves only that point rather than re-fitting.
+ */
 export function fitPca(rows: number[][]): PcaBasis | null {
   const m = rows.length;
   if (m < 3) return null;
@@ -628,9 +664,11 @@ export function fitPca(rows: number[][]): PcaBasis | null {
   };
 }
 
-/// Project one playlist mean-vector (FEATURE_KEYS order) through a fitted basis into normalized
-/// [0,1]² map space (with the same small overshoot the fit allows for outliers). Because the
-/// basis and bounds are fixed, an edited or brand-new playlist moves only itself.
+/**
+ * Project one playlist mean-vector (FEATURE_KEYS order) through a fitted basis into normalized
+ * [0,1]² map space (with the same small overshoot the fit allows for outliers). Because the
+ * basis and bounds are fixed, an edited or brand-new playlist moves only itself.
+ */
 export function projectPca(basis: PcaBasis, row: number[]): { x: number; y: number } {
   const z = basis.kept.map((j, i) => (row[j] - basis.means[i]) / basis.stds[i]);
   const px = z.reduce((acc, zi, i) => acc + zi * basis.v1[i], 0);

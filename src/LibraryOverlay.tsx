@@ -26,8 +26,10 @@ import { useRateLimit } from "./rateLimit";
 
 export type OverlayKind = "songs" | "doctor" | "stale" | "status" | "similarity";
 
-/// Which panel is open, and the data it was loaded with. `null` fields mean "not loaded yet"
-/// — paired with the `busy` prop, that's the panel's own spinner rather than an empty result.
+/**
+ * Which panel is open, and the data it was loaded with. `null` fields mean "not loaded yet"
+ * — paired with the `busy` prop, that's the panel's own spinner rather than an empty result.
+ */
 export type Overlay =
   | { kind: "songs"; data: NamedPlaylist[] | null }
   | { kind: "doctor"; data: NamedPlaylist[] | null }
@@ -39,9 +41,11 @@ export type Overlay =
       feat: Record<string, Features> | null;
     };
 
-/// The data-less form of a panel, shown while its loader runs so the panel appears at once
-/// instead of after the round trip. Exhaustive by return type: a new `OverlayKind` without a
-/// case here won't compile.
+/**
+ * The data-less form of a panel, shown while its loader runs so the panel appears at once
+ * instead of after the round trip. Exhaustive by return type: a new `OverlayKind` without a
+ * case here won't compile.
+ */
 export function emptyOverlay(kind: OverlayKind): Overlay {
   switch (kind) {
     case "songs":
@@ -68,15 +72,15 @@ export default function LibraryOverlay({
   onError,
 }: {
   overlay: Overlay;
-  /// True while the loader for `overlay.kind` is in flight.
+  /** True while the loader for `overlay.kind` is in flight. */
   busy: boolean;
-  /// Files of the archived playlists, which the similarity map greys out.
+  /** Files of the archived playlists, which the similarity map greys out. */
   archived: Set<string>;
   onClose: () => void;
   onOpenPlaylist: (file: string) => void;
   onOpenTrack: (file: string, trackId: string) => void;
   onNormalize: (group: CrossDupGroup, keepId: string) => void;
-  /// Surface a failure in Library's status line — this component has no message area.
+  /** Surface a failure in Library's status line — this component has no message area. */
   onError: (message: string) => void;
 }) {
   // Drift results live here rather than in Library because the status panel is the only thing
@@ -89,8 +93,10 @@ export default function LibraryOverlay({
   const cancelDrift = useRef(false);
   const { blocked } = useRateLimit();
 
-  /// Drop any in-flight "checking" marker so a stopped run doesn't leave a row spinning.
-  /// Returns the same object when there's nothing to clear, so React can skip the re-render.
+  /**
+   * Drop any in-flight "checking" marker so a stopped run doesn't leave a row spinning.
+   * Returns the same object when there's nothing to clear, so React can skip the re-render.
+   */
   function clearChecking() {
     setDriftMap((m) => {
       const stale = Object.keys(m).filter((k) => m[k] === "checking");
