@@ -10,9 +10,9 @@ body:
         land.
 
         **Worth checking [ROADMAP.md](https://github.com/ulysses822/setlist/blob/main/ROADMAP.md)
-        first** — it lists what's planned, and what's deliberately not, with a pointer to a
-        project that does each of those things properly. Saves you writing a long issue for
-        nothing.
+        first.** Nothing is currently planned — this is a personal project, worked on when the
+        mood takes me — and some things are ruled out entirely, each with a pointer to a project
+        that does them properly. Requests are still welcome; just don't expect a date.
 
   - type: textarea
     id: problem

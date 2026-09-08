@@ -3,9 +3,10 @@
 Thanks for looking. Issues and pull requests are both welcome — including "this is confusing"
 and "the README is wrong", which are as useful as code.
 
-Before starting anything large, read [ROADMAP.md](ROADMAP.md). It says what's planned and
-what's deliberately out of scope, which is the cheapest way to avoid writing something that
-was never going to be merged.
+Before starting anything large, read [ROADMAP.md](ROADMAP.md). Nothing is currently planned
+— this is a personal project built when I feel like it — but it lists what's deliberately out
+of scope, which is the cheapest way to avoid writing something that was never going to be
+merged.
 
 ## Before you start
 
