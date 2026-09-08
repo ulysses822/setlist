@@ -474,12 +474,21 @@ async fn push_playlist(
     .await
 }
 
+/// Hand the webview a Spotify token. The **only** command that does, and the only token that
+/// ever crosses the IPC boundary — so it is deliberately the streaming-scoped one, which can
+/// drive playback and nothing else.
+///
+/// Named for the family rather than generically, because the name is the whole guardrail at
+/// this call site: `spotify::streaming_token` and `ensure_token` have the same signature, and
+/// swapping one for the other would compile cleanly while handing a compromised renderer
+/// `playlist-modify-*`. A test in `spotify::auth` reads this function back and fails if it
+/// ever calls anything but the streaming accessor.
 #[tauri::command]
-async fn get_access_token(
+async fn get_streaming_token(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    spotify::access_token(&state, require_client_id(&app)?).await
+    spotify::streaming_token(&state, require_client_id(&app)?).await
 }
 
 #[tauri::command]
@@ -657,7 +666,7 @@ pub fn run() {
             sync_status,
             refresh_playlist,
             track_features,
-            get_access_token,
+            get_streaming_token,
             player_play,
             player_transfer,
             player_devices,

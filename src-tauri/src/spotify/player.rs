@@ -13,7 +13,7 @@ use super::{
 /// Expose an access token to the frontend (the Web Playback SDK needs one). Deliberately the
 /// streaming-scoped token, not the app's main one: this is the only token that crosses the
 /// IPC boundary, and it can play music but not read or modify playlists.
-pub async fn access_token(state: &AppState, client_id: String) -> Result<String, String> {
+pub async fn streaming_token(state: &AppState, client_id: String) -> Result<String, String> {
     ensure_streaming_token(state, &client_id).await
 }
 

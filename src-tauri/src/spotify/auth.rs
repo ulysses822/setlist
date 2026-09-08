@@ -601,6 +601,33 @@ mod tests {
         assert!(!SCOPES.split_whitespace().any(|s| s == "streaming"));
     }
 
+    /// The two tests above pin what each family carries. This one pins which family the webview
+    /// is actually handed, which is a single line in `lib.rs` — read back here rather than
+    /// described, the same trick as the uninstaller test below and for the same reason: the two
+    /// accessors have identical signatures, so pointing that line at the main family would
+    /// compile, pass everything else, and quietly give a compromised renderer playlist writes.
+    #[test]
+    fn the_webview_is_only_ever_handed_the_streaming_family() {
+        let lib = include_str!("../lib.rs");
+        let marker = "async fn get_streaming_token(";
+        let body = lib
+            .split(marker)
+            .nth(1)
+            .expect("the command the webview asks for a token should still be called this");
+        let body = &body[..body.find("\n}").expect("its body should end")];
+        assert!(
+            body.contains("spotify::streaming_token("),
+            "{marker} must call the streaming accessor, not the main one:\n{body}"
+        );
+        // And no other command reaches for the backend's own token on the way out. Matched as
+        // a call rather than a mention: comments in `lib.rs` name `ensure_token` to explain
+        // why it is *not* used there, and those are the point rather than a violation.
+        assert!(
+            !lib.contains("ensure_token("),
+            "the main-family accessor must not be called anywhere in the IPC surface"
+        );
+    }
+
     /// Two families mean two keychain entries and two verdicts. Sharing an entry would let a
     /// streaming refresh rotate the main token out from under the backend; sharing the
     /// revocation rule would let a dead player log the whole app out.

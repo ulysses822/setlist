@@ -181,7 +181,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       const player = new Spotify.Player({
         name: "Setlist",
         getOAuthToken: (cb: (t: string) => void) => {
-          api.getAccessToken().then(
+          api.getStreamingToken().then(
             (t) => {
               tokenFailureRef.current = null;
               pendingTokenCb.current = null;
@@ -390,7 +390,7 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
   const retryToken = useCallback(() => {
     const cb = pendingTokenCb.current;
     if (!cb) return; // nothing waiting: either it never failed, or it's already answered
-    api.getAccessToken().then(
+    api.getStreamingToken().then(
       (t) => {
         tokenFailureRef.current = null;
         pendingTokenCb.current = null;
