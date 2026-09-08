@@ -37,7 +37,9 @@ import { createServer } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 
 const REDIRECT = "http://127.0.0.1:8888/callback";
+const TOKEN_URL = "https://accounts.spotify.com/api/token";
 const SCOPE = "user-read-recently-played";
+const EXCHANGE_TIMEOUT_MS = 20_000;
 // Matches the desktop app's loopback catcher (src-tauri/src/spotify/auth.rs). The port is not
 // negotiable: Spotify matches the redirect URI exactly against the one registered on the
 // dashboard, so it has to be the same 8888 the README tells you to register.
@@ -140,29 +142,12 @@ const authUrl =
   `&code_challenge_method=S256&code_challenge=${challenge}` +
   `&state=${state}&scope=${encodeURIComponent(SCOPE)}`;
 
-const server = createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", "http://127.0.0.1:8888");
-  if (url.pathname !== "/callback" || url.searchParams.get("state") !== state) {
-    res.end("Waiting for Spotify...");
-    return;
-  }
-  const err = url.searchParams.get("error");
-  const code = url.searchParams.get("code");
-  // Fixed strings only. Reflecting `err` into the page would put an attacker-influenced query
-  // parameter straight into HTML; the detail goes to the terminal below instead, which is
-  // where the user is looking anyway.
-  res.setHeader("Content-Type", "text/html");
-  res.end(
-    err
-      ? "<h2>Authorization failed — return to the terminal for details.</h2>"
-      : "<h2>Done — return to the terminal for your refresh token.</h2>"
-  );
-  server.close();
-  if (err || !code) {
-    console.error(`Spotify denied authorization: ${err ?? "no code returned"}`);
-    process.exit(1);
-  }
-
+/**
+ * Trade the authorization code for a refresh token. Rejects on a transport failure — the
+ * caller turns that into a readable message. A refusal Spotify actually answered with is
+ * reported and exits here, since there is nothing further to try.
+ */
+async function exchangeCode(code) {
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,
@@ -176,10 +161,14 @@ const server = createServer(async (req, res) => {
     headers.Authorization =
       "Basic " + Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
   }
-  const resp = await fetch("https://accounts.spotify.com/api/token", {
+  // Node's fetch has no default timeout, and this one runs after the browser has been sent
+  // away, so a stalled socket would leave the terminal sitting at "Waiting..." with nothing
+  // left to time it out — `giveUp` below is unref'd and only covers the wait for the redirect.
+  const resp = await fetch(TOKEN_URL, {
     method: "POST",
     headers,
     body,
+    signal: AbortSignal.timeout(EXCHANGE_TIMEOUT_MS),
   });
   if (!resp.ok) {
     console.error(`Token exchange failed: ${resp.status} ${await resp.text()}`);
@@ -188,6 +177,51 @@ const server = createServer(async (req, res) => {
   const json = await resp.json();
   if (!json.refresh_token) {
     console.error("Spotify did not return a refresh token.");
+    process.exit(1);
+  }
+  return json;
+}
+
+const server = createServer(async (req, res) => {
+  const url = new URL(req.url ?? "/", "http://127.0.0.1:8888");
+  if (url.pathname !== "/callback" || url.searchParams.get("state") !== state) {
+    res.end("Waiting for Spotify...");
+    return;
+  }
+  const err = url.searchParams.get("error");
+  const code = url.searchParams.get("code");
+  // Fixed strings only. Reflecting `err` into the page would put an attacker-influenced query
+  // parameter straight into HTML; the detail goes to the terminal below instead, which is
+  // where the user is looking anyway.
+  //
+  // "Authorized" rather than "Done": at this point Spotify has approved the grant, but the
+  // exchange that turns it into a token hasn't run yet and can still fail. The tab is answered
+  // now regardless, so closing the browser never leaves it spinning on a request we're holding.
+  res.setHeader("Content-Type", "text/html");
+  res.end(
+    err
+      ? "<h2>Authorization failed — return to the terminal for details.</h2>"
+      : "<h2>Authorized — return to the terminal for your refresh token.</h2>"
+  );
+  server.close();
+  if (err || !code) {
+    console.error(`Spotify denied authorization: ${err ?? "no code returned"}`);
+    process.exit(1);
+  }
+
+  let json;
+  try {
+    json = await exchangeCode(code);
+  } catch (e) {
+    // A transport failure -- DNS, a reset connection, our own deadline. Without this catch the
+    // rejection escapes the handler and Node ends the process on a stack trace, printed over
+    // the top of a browser tab that has just said the authorization worked. It did; what
+    // failed is the exchange. The code is single-use and now spent, so the only advice is to
+    // start again.
+    console.error(
+      `\nCouldn't exchange the authorization code: ${e.message}\n` +
+        "Nothing was saved, and that code has been spent. Re-run to try again."
+    );
     process.exit(1);
   }
   console.log("\nGranted scope:", json.scope ?? "(unknown)");
