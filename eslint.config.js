@@ -58,6 +58,11 @@ export default tseslint.config(
       // Stays on, and stays a warning. Every hit is a real question about whether a memo can
       // serve a stale result, but the answers are behavioural — changing a dependency array
       // needs the app run, not a type-check — so they are a review list rather than a gate.
+      //
+      // A review list still has to be able to shrink and not grow, so `lint:web` runs with
+      // `--max-warnings 9`, today's count. Answering one means lowering that number in the
+      // same commit; adding a tenth fails the build. Warning rather than error was always the
+      // right call — leaving the total unpinned was the half that was missing.
       "react-hooks/exhaustive-deps": "warn",
 
       // Purely about how finely Vite's fast refresh can reload a file. Every hit is a context

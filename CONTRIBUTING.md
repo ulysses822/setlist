@@ -71,7 +71,9 @@ compiler and holds several of those patterns on purpose.
 `react-hooks/exhaustive-deps` is a warning rather than an error. There are nine of them today,
 and each is a real question about whether a memo can serve a stale result — but the answer is
 behavioural, so closing one means running the app, not just satisfying the linter. If you fix
-one, say in the PR what you clicked. Tests read as sentences in both languages
+one, say in the PR what you clicked. The count is pinned (`eslint . --max-warnings 9`), so the
+list can shrink but not grow: answer one and lower the number in the same commit; a tenth
+fails the build. Tests read as sentences in both languages
 (`fn a_renamed_playlist_takes_its_file_and_its_saved_state_with_it`, `it("marks only the song
 that moved, not everything after it")`); a name that says what should be true is worth more
 than a comment explaining what the assertion means.

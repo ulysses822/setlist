@@ -46,7 +46,7 @@ Each of these is someone else's problem, or in tension with what the app is for.
 
 - Nine `react-hooks/exhaustive-deps` warnings. Each is a real question about whether a cached
   calculation can go stale, and answering one means running the app rather than satisfying a
-  linter.
+  linter. The count is pinned in CI, so it can only go down.
 - No component tests. The logic is covered on both sides; rendering isn't.
 - `Library.tsx` is long. Three concerns are out in hooks; the track row and the main render
   aren't.
