@@ -15,6 +15,27 @@ so login would look like it worked and be gone by the next restart.
 The frontend half type-checks and builds anywhere. On macOS or Linux, `npm run build`,
 `npm run test:web` and `npm run lint:web` work; anything touching `cargo` does not.
 
+### If this session is running on Linux (cloud sandbox, container, CI shell)
+
+The `compile_error!` is unconditional, so there is no flag or feature that gets the Rust half
+building here. Plan around it rather than fighting it:
+
+- **Verifiable in-session:** `npm run build`, `npm run test:web` (43 tests), `npm run lint:web`,
+  and `node --check` on `scripts/get-refresh-token.mjs` / `templates/poll-plays.mjs`. That covers
+  the whole frontend, the two standalone Node scripts, docs and workflows.
+- **Not verifiable in-session:** `cargo build`, `clippy`, `cargo fmt --check`, all 64 Rust tests,
+  and running the app (needs Windows, WebView2, the credential manager, and real Spotify
+  credentials).
+
+For a change under `src-tauri/`, push a branch and let `.github/workflows/ci.yml` be the
+verification — its `rust` job runs on `windows-latest` and gates `cargo fmt --check`, `clippy
+-D warnings` and the full suite. Cold run is roughly 6 minutes. Report it that way: say CI
+verified it, not that the tests were run, and never hand-wave a `cargo fmt` result — a
+formatting miss fails the build and is the cheapest thing to get wrong from here.
+
+The same limit applies to UI work: "run the app and say what you clicked" is impossible on
+Linux, so say that instead of skipping the question.
+
 ## Commands
 
 ```bash
