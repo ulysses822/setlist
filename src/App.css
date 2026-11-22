@@ -954,6 +954,22 @@ body {
   overflow-y: auto;
 }
 
+/* Separates songs from albums from artists — all three come back from one search, and
+   "+ add" means one track in the first group and a dozen in the next. */
+.results-head {
+  padding: 8px 10px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.results-head:not(:first-child) {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 4px;
+}
+
 .result {
   width: 100%;
   display: grid;
@@ -967,6 +983,11 @@ body {
   padding: 8px 10px;
   border-radius: 8px;
   cursor: pointer;
+}
+
+.result:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .r-dur {

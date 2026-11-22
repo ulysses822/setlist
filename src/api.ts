@@ -82,6 +82,28 @@ export interface SearchResult {
   duration_ms: number | null;
 }
 
+/** An album to expand into tracks — `id` is a bare album id, not a uri. */
+export interface AlbumResult {
+  id: string;
+  name: string;
+  artists: string[];
+  total_tracks: number;
+  year: string | null;
+}
+
+/** An artist to expand into their top tracks. */
+export interface ArtistResult {
+  id: string;
+  name: string;
+}
+
+/** One search, three kinds of answer: songs to add, albums and artists to expand. */
+export interface CatalogSearch {
+  tracks: SearchResult[];
+  albums: AlbumResult[];
+  artists: ArtistResult[];
+}
+
 export interface ReplacementSuggestion {
   source: "library" | "spotify";
   id: string;
@@ -278,7 +300,12 @@ export const api = {
   deletePlaylist: (file: string) => invoke<void>("delete_playlist", { file }),
   unfollowArchived: () => invoke<UnfollowReport>("unfollow_archived"),
   followPlaylist: (file: string) => invoke<void>("follow_playlist", { file }),
-  searchTracks: (query: string) => invoke<SearchResult[]>("search_tracks", { query }),
+  searchCatalog: (query: string) => invoke<CatalogSearch>("search_catalog", { query }),
+  // Expand a search result into playlist entries. Album order for an album; Spotify's own
+  // popularity ranking, about ten tracks, for an artist.
+  albumTracks: (albumId: string) => invoke<TrackEntry[]>("album_tracks", { albumId }),
+  artistTopTracks: (artistId: string) =>
+    invoke<TrackEntry[]>("artist_top_tracks", { artistId }),
   /**
    * Read one catalog track as a playlist entry, by bare track id. Asks Spotify rather than
    * assembling the entry here, so an added track carries the ISRC the duplicate checks need

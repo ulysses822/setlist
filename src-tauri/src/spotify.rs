@@ -415,6 +415,21 @@ pub(crate) fn err<E: std::fmt::Display>(e: E) -> String {
 // That also covers a token that expires mid-flow (e.g. a bulk pull outliving the ~1h TTL).
 // ---------------------------------------------------------------------------
 
+// Ceiling on pages followed per paginated listing — insurance against a malformed
+// self-referencing `next` link looping forever. Far above any real library: 200 pages is
+// 20k tracks in one playlist, or 10k playlists.
+const MAX_PAGES: usize = 200;
+
+pub(crate) fn pagination_guard(pages: &mut usize) -> Result<(), String> {
+    *pages += 1;
+    if *pages > MAX_PAGES {
+        return Err(format!(
+            "Spotify pagination did not terminate after {MAX_PAGES} pages — aborting."
+        ));
+    }
+    Ok(())
+}
+
 /// GET a JSON resource. On a non-2xx response, include Spotify's response body in the error
 /// so failures like 403/404 are diagnosable.
 pub(crate) async fn get_json<T: serde::de::DeserializeOwned>(
@@ -818,39 +833,230 @@ pub async fn delete_playlist(
     Ok(())
 }
 
-pub async fn search_tracks(
+/// An album a search turned up, as something to expand rather than something to play.
+#[derive(Serialize)]
+pub struct AlbumResult {
+    /// Bare album id, for `album_tracks` — not a uri: an album is never added as one thing.
+    pub id: String,
+    pub name: String,
+    pub artists: Vec<String>,
+    pub total_tracks: usize,
+    /// Just the year out of the release date, which is what tells two pressings apart.
+    pub year: Option<String>,
+}
+
+/// An artist a search turned up, to expand into their top tracks.
+#[derive(Serialize)]
+pub struct ArtistResult {
+    /// Bare artist id, for `artist_top_tracks`.
+    pub id: String,
+    pub name: String,
+}
+
+/// What one search answers with: tracks to add individually, and albums and artists to
+/// expand into tracks.
+#[derive(Serialize)]
+pub struct CatalogSearch {
+    pub tracks: Vec<SearchResult>,
+    pub albums: Vec<AlbumResult>,
+    pub artists: Vec<ArtistResult>,
+}
+
+/// Search the catalog for tracks, albums and artists at once.
+///
+/// One request for all three: `limit` applies per type, so this costs exactly what searching
+/// for tracks alone used to. Adding an album a song at a time was the thing worth fixing, and
+/// paying three requests to fix it would have traded one chore for a rate-limit cooldown.
+pub async fn search_catalog(
     state: &AppState,
     client_id: String,
     query: String,
-) -> Result<Vec<SearchResult>, String> {
+) -> Result<CatalogSearch, String> {
     if query.trim().is_empty() {
-        return Ok(Vec::new());
+        return Ok(CatalogSearch {
+            tracks: Vec::new(),
+            albums: Vec::new(),
+            artists: Vec::new(),
+        });
     }
     // Spotify caps the search `limit` at 10 — asking for 20 answers 400.
     let url = format!(
-        "{API}/search?type=track&limit=10&q={}",
+        "{API}/search?type=track,album,artist&limit=10&q={}",
         urlencoding::encode(query.trim())
     );
 
     #[derive(Deserialize)]
-    struct SearchResp {
-        tracks: Paging<TrackObj>,
+    struct AlbumSearchObj {
+        id: String,
+        name: String,
+        #[serde(default)]
+        artists: Vec<ArtistObj>,
+        #[serde(default)]
+        total_tracks: usize,
+        #[serde(default)]
+        release_date: Option<String>,
     }
 
-    let resp: SearchResp = get_json(state, &client_id, &url).await?;
-    Ok(resp
-        .tracks
-        .items
-        .into_iter()
-        .map(|t| SearchResult {
-            id: t.uri,
-            title: t.name,
-            artists: t.artists.into_iter().map(|a| a.name).collect(),
-            isrc: t.external_ids.and_then(|e| e.isrc),
-            album: t.album.map(|a| a.name),
-            duration_ms: t.duration_ms,
-        })
-        .collect())
+    #[derive(Deserialize)]
+    struct ArtistSearchObj {
+        id: String,
+        name: String,
+    }
+
+    // Each key is absent unless its type was asked for, and Spotify has been known to answer
+    // a multi-type search with one of them missing — so a missing album list means "none",
+    // not a failed search for the tracks that did come back.
+    #[derive(Deserialize)]
+    struct CatalogResp {
+        #[serde(default)]
+        tracks: Option<Paging<TrackObj>>,
+        #[serde(default)]
+        albums: Option<Paging<AlbumSearchObj>>,
+        #[serde(default)]
+        artists: Option<Paging<ArtistSearchObj>>,
+    }
+
+    let resp: CatalogResp = get_json(state, &client_id, &url).await?;
+    Ok(CatalogSearch {
+        tracks: resp
+            .tracks
+            .map(|p| p.items)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| SearchResult {
+                id: t.uri,
+                title: t.name,
+                artists: t.artists.into_iter().map(|a| a.name).collect(),
+                isrc: t.external_ids.and_then(|e| e.isrc),
+                album: t.album.map(|a| a.name),
+                duration_ms: t.duration_ms,
+            })
+            .collect(),
+        albums: resp
+            .albums
+            .map(|p| p.items)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| AlbumResult {
+                id: a.id,
+                name: a.name,
+                artists: a.artists.into_iter().map(|x| x.name).collect(),
+                total_tracks: a.total_tracks,
+                year: a.release_date.and_then(|d| year_of(&d)),
+            })
+            .collect(),
+        artists: resp
+            .artists
+            .map(|p| p.items)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| ArtistResult {
+                id: a.id,
+                name: a.name,
+            })
+            .collect(),
+    })
+}
+
+/// The year out of a Spotify release date, which is `YYYY`, `YYYY-MM` or `YYYY-MM-DD`
+/// depending on how precisely the release is known. `None` for anything else, so a blank or
+/// malformed date shows no year rather than a misleading fragment of one.
+fn year_of(release_date: &str) -> Option<String> {
+    let year: String = release_date.chars().take(4).collect();
+    (year.len() == 4 && year.bytes().all(|b| b.is_ascii_digit())).then_some(year)
+}
+
+/// Read full track objects for `ids`, in the order given, as playlist entries.
+///
+/// 50 ids per request, which is this endpoint's cap. Every id is checked before it goes into
+/// the query string: an unchecked `&` or `#` there would rewrite the request's parameters
+/// just as surely as a `..` rewrites its path.
+async fn tracks_by_id(
+    state: &AppState,
+    client_id: &str,
+    ids: &[String],
+) -> Result<Vec<TrackEntry>, String> {
+    // Spotify answers an id it can't resolve with a null element rather than an error, so the
+    // list can be shorter than what was asked for.
+    #[derive(Deserialize)]
+    struct TracksResp {
+        #[serde(default = "Vec::new")]
+        tracks: Vec<Option<TrackObj>>,
+    }
+
+    let mut out = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(50) {
+        for id in chunk {
+            if !is_spotify_id(id) {
+                return Err(format!(
+                    "{:?} is not a Spotify id.",
+                    id.chars().take(MAX_ID_LEN).collect::<String>()
+                ));
+            }
+        }
+        let url = format!("{API}/tracks?market=from_token&ids={}", chunk.join(","));
+        let resp: TracksResp = get_json(state, client_id, &url).await?;
+        out.extend(resp.tracks.into_iter().flatten().map(entry_from));
+    }
+    Ok(out)
+}
+
+/// Every track on an album, in album order, as playlist entries.
+///
+/// Two requests rather than one: an album's own track listing returns Spotify's *simplified*
+/// track object, which carries no `external_ids`, so every ISRC would come back null — and
+/// the ISRC is what both duplicate checks key on. The listing supplies the ids and their
+/// order; a batch read of those ids supplies the tracks themselves.
+pub async fn album_tracks(
+    state: &AppState,
+    client_id: String,
+    album_id: String,
+) -> Result<Vec<TrackEntry>, String> {
+    #[derive(Deserialize)]
+    struct SimpleTrackObj {
+        #[serde(default)]
+        id: Option<String>,
+    }
+
+    let mut ids: Vec<String> = Vec::new();
+    let mut url = format!(
+        "{}/tracks?limit=50&market=from_token",
+        catalog_url("albums", &album_id)?
+    );
+    let mut pages = 0;
+    loop {
+        pagination_guard(&mut pages)?;
+        let page: Paging<SimpleTrackObj> = get_json(state, &client_id, &url).await?;
+        ids.extend(page.items.into_iter().filter_map(|t| t.id));
+        match page.next {
+            Some(next) => url = next,
+            None => break,
+        }
+    }
+    tracks_by_id(state, &client_id, &ids).await
+}
+
+/// An artist's top tracks in this market, as playlist entries.
+///
+/// One request: this endpoint returns full track objects, ISRCs included. "Top" is Spotify's
+/// own popularity ranking and about ten tracks long — a sampler, not a discography.
+pub async fn artist_top_tracks(
+    state: &AppState,
+    client_id: String,
+    artist_id: String,
+) -> Result<Vec<TrackEntry>, String> {
+    #[derive(Deserialize)]
+    struct TopResp {
+        #[serde(default = "Vec::new")]
+        tracks: Vec<TrackObj>,
+    }
+
+    let url = format!(
+        "{}/top-tracks?market=from_token",
+        catalog_url("artists", &artist_id)?
+    );
+    let resp: TopResp = get_json(state, &client_id, &url).await?;
+    Ok(resp.tracks.into_iter().map(entry_from).collect())
 }
 
 /// A Spotify track object as a playlist entry.
@@ -1191,6 +1397,22 @@ mod tests {
         // whenever the track happened to be read.
         assert!(entry.added_at.is_none());
         assert!(entry.added_by.is_none());
+    }
+
+    #[test]
+    fn a_release_year_is_read_from_every_precision_spotify_uses() {
+        // Spotify's `release_date` is one of these three, by how precisely the date is known.
+        assert_eq!(year_of("1975-11-21").as_deref(), Some("1975"));
+        assert_eq!(year_of("1975-11").as_deref(), Some("1975"));
+        assert_eq!(year_of("1975").as_deref(), Some("1975"));
+
+        // Anything else shows no year, rather than a fragment of one that reads like a year.
+        for bad in ["", "197", "19x5", "unknown", "-1975"] {
+            assert!(
+                year_of(bad).is_none(),
+                "should not have read a year from {bad:?}"
+            );
+        }
     }
 
     #[test]

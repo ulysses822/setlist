@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
+  type CatalogSearch,
   type LocalPlaylist,
   type LocalTrackHit,
   type SearchResult,
@@ -93,9 +94,11 @@ export default function Library() {
 
 
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
+  const [results, setResults] = useState<CatalogSearch | null>(null);
   const [searching, setSearching] = useState(false);
   const [addingPlaying, setAddingPlaying] = useState(false);
+  // Id of the album or artist currently being expanded, so only that row says so.
+  const [expanding, setExpanding] = useState<string | null>(null);
 
   const dragIndex = useRef<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
@@ -176,7 +179,7 @@ export default function Library() {
     onPlaylistsChanged: () => void loadList(false),
     onLibraryChanged: () => void loadList(),
     onOpening: (file) => {
-      setResults([]);
+      setResults(null);
       setQuery("");
       metrics.resetFor(file); // this playlist's saved columns and mood goal
     },
@@ -471,6 +474,43 @@ export default function Library() {
     }
   }
 
+  /**
+   * Add every track an album or artist result stands for, skipping any already in the
+   * playlist — so adding an album you own half of adds the other half and says so, rather
+   * than doubling what's there.
+   *
+   * `fetch` is the expansion, which is a request: the search result names the album or the
+   * artist, and the tracks are read only once one is actually chosen.
+   */
+  async function addExpanded(id: string, label: string, fetch: () => Promise<TrackEntry[]>) {
+    if (!draft || expanding) return;
+    setExpanding(id);
+    try {
+      const incoming = await fetch();
+      if (incoming.length === 0) {
+        setStatus({ kind: "warn", msg: `Spotify listed no playable tracks for "${label}"` });
+        return;
+      }
+      const { tracks, added, skipped } = appendMissing(draft.tracks, incoming);
+      if (added.length === 0) {
+        setStatus({ kind: "ok", msg: `Every track from "${label}" is already here` });
+        return;
+      }
+      edit(tracks);
+      loadFeatures(added);
+      setStatus({
+        kind: "ok",
+        msg: `Added ${added.length} track${added.length === 1 ? "" : "s"} from "${label}"${
+          skipped > 0 ? `, skipped ${skipped} already here` : ""
+        }`,
+      });
+    } catch (e) {
+      setStatus({ kind: "err", msg: String(e) });
+    } finally {
+      setExpanding(null);
+    }
+  }
+
   function addResult(r: SearchResult) {
     if (!draft) return;
     const track: TrackEntry = {
@@ -528,7 +568,7 @@ export default function Library() {
   // Debounced Spotify search (for adding tracks). Suspended while rate-limited.
   useEffect(() => {
     if (query.trim() === "" || blocked) {
-      setResults([]);
+      setResults(null);
       setSearching(false); // clear a stuck "Searching…" when the box is emptied mid-search
       return;
     }
@@ -536,7 +576,7 @@ export default function Library() {
     setSearching(true);
     const t = setTimeout(async () => {
       try {
-        const r = await api.searchTracks(query);
+        const r = await api.searchCatalog(query);
         if (!cancelled) setResults(r);
       } catch (e) {
         if (!cancelled) setStatus({ kind: "err", msg: String(e) });
@@ -657,6 +697,12 @@ export default function Library() {
     return b === playingId || b === playingLinkedId;
   };
   const playingActive = player?.playing != null && !player.playing.paused;
+
+  // Whether the search turned anything up at all. Checked across all three kinds so an
+  // artist-only match still opens the result list.
+  const hasResults =
+    results != null &&
+    (results.tracks.length > 0 || results.albums.length > 0 || results.artists.length > 0);
 
   // The playing song, when it's one the editor can offer to add. A local file is excluded:
   // it has no catalog entry to read, and Spotify couldn't accept it on a push either.
@@ -1171,11 +1217,11 @@ export default function Library() {
                 <input
                   className="filter"
                   name="spotify-track-search"
-                  aria-label="Search Spotify to add a track"
+                  aria-label="Search Spotify for a song, album or artist"
                   placeholder={
                     blocked
                       ? "Spotify search paused — rate-limited"
-                      : "Search Spotify to add a track…"
+                      : "Search Spotify for a song, album or artist…"
                   }
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
@@ -1196,22 +1242,78 @@ export default function Library() {
                   </button>
                 )}
               </div>
-              {(searching || results.length > 0) && (
+              {(searching || hasResults) && (
                 <ul className="results">
                   {searching && <li className="hint pad">Searching…</li>}
-                  {results.map((r) => (
-                    <li key={r.id}>
-                      <button className="result" onClick={() => addResult(r)}>
-                        <span className="r-title">{r.title}</span>
-                        <span className="r-meta">
-                          {r.artists.join(", ")}
-                          {r.album ? ` · ${r.album}` : ""}
-                        </span>
-                        <span className="r-dur">{fmtDuration(r.duration_ms)}</span>
-                        <span className="r-add">+ add</span>
-                      </button>
-                    </li>
-                  ))}
+                  {results && results.tracks.length > 0 && (
+                    <>
+                      <li className="results-head">Songs</li>
+                      {results.tracks.map((r) => (
+                        <li key={r.id}>
+                          <button className="result" onClick={() => addResult(r)}>
+                            <span className="r-title">{r.title}</span>
+                            <span className="r-meta">
+                              {r.artists.join(", ")}
+                              {r.album ? ` · ${r.album}` : ""}
+                            </span>
+                            <span className="r-dur">{fmtDuration(r.duration_ms)}</span>
+                            <span className="r-add">+ add</span>
+                          </button>
+                        </li>
+                      ))}
+                    </>
+                  )}
+                  {results && results.albums.length > 0 && (
+                    <>
+                      <li className="results-head">Albums</li>
+                      {results.albums.map((a) => (
+                        <li key={a.id}>
+                          <button
+                            className="result"
+                            disabled={expanding != null || blocked}
+                            onClick={() =>
+                              void addExpanded(a.id, a.name, () => api.albumTracks(a.id))
+                            }
+                          >
+                            <span className="r-title">{a.name}</span>
+                            <span className="r-meta">
+                              {[
+                                a.artists.join(", "),
+                                a.year,
+                                `${a.total_tracks} track${a.total_tracks === 1 ? "" : "s"}`,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ")}
+                            </span>
+                            <span className="r-add">
+                              {expanding === a.id ? "adding…" : "+ add all"}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </>
+                  )}
+                  {results && results.artists.length > 0 && (
+                    <>
+                      <li className="results-head">Artists</li>
+                      {results.artists.map((a) => (
+                        <li key={a.id}>
+                          <button
+                            className="result"
+                            disabled={expanding != null || blocked}
+                            onClick={() =>
+                              void addExpanded(a.id, a.name, () => api.artistTopTracks(a.id))
+                            }
+                          >
+                            <span className="r-title">{a.name}</span>
+                            <span className="r-add">
+                              {expanding === a.id ? "adding…" : "+ top tracks"}
+                            </span>
+                          </button>
+                        </li>
+                      ))}
+                    </>
+                  )}
                 </ul>
               )}
             </div>

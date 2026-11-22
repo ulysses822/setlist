@@ -13,24 +13,9 @@ use super::store::{
     PlaylistFile, SyncMeta, TrackEntry,
 };
 use super::{
-    ensure_token, err, get_json, playlist_url, send_capture, AppState, Paging, PlaylistMeta,
-    PlaylistObj, PlaylistSummary, PlaylistTrackObj, API,
+    ensure_token, err, get_json, pagination_guard, playlist_url, send_capture, AppState, Paging,
+    PlaylistMeta, PlaylistObj, PlaylistSummary, PlaylistTrackObj, API,
 };
-
-// Ceiling on pages followed per paginated listing — insurance against a malformed
-// self-referencing `next` link looping forever. Far above any real library: 200 pages is
-// 20k tracks in one playlist, or 10k playlists.
-const MAX_PAGES: usize = 200;
-
-fn pagination_guard(pages: &mut usize) -> Result<(), String> {
-    *pages += 1;
-    if *pages > MAX_PAGES {
-        return Err(format!(
-            "Spotify pagination did not terminate after {MAX_PAGES} pages — aborting."
-        ));
-    }
-    Ok(())
-}
 
 pub(crate) async fn fetch_tracks(
     state: &AppState,
