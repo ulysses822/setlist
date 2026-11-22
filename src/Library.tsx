@@ -15,6 +15,7 @@ import { removeExactDuplicates, removeTracksByIds, type CrossDupGroup } from "./
 import {
   appendMissing,
   removeAtIndices,
+  sameTracks,
   sortTracks,
   toggleSelection,
   type SortDir,
@@ -470,23 +471,16 @@ export default function Library() {
       let changed = 0;
       for (const pl of scanned) {
         if (!pl.tracks.some((t) => removeIds.has(bareId(t.id)))) continue;
-        const replaced = pl.tracks.map((t) =>
-          removeIds.has(bareId(t.id))
-            ? { ...keep.track, added_at: t.added_at, added_by: t.added_by }
-            : t
+        const written = await restage(pl.file, (current) =>
+          removeExactDuplicates(
+            current.map((t) =>
+              removeIds.has(bareId(t.id))
+                ? { ...keep.track, added_at: t.added_at, added_by: t.added_by }
+                : t
+            )
+          )
         );
-        const deduped = removeExactDuplicates(replaced);
-        const staged = await api.getStaged(pl.file);
-        await api.stagePlaylist(
-          pl.file,
-          staged?.name ?? null,
-          staged?.description ?? null,
-          deduped
-        );
-        // This staged behind the open editor's back — sync the in-memory draft, or a
-        // later Save would clobber the normalization with the stale track list.
-        if (pl.file === selected) draftApi.adoptStaged(deduped);
-        changed++;
+        if (written) changed++;
       }
       // `changed` can be 0 if the scan behind the panel has gone stale — say so rather than
       // reporting a normalization "across 0 playlists" that didn't happen.
@@ -522,11 +516,10 @@ export default function Library() {
     if (!draft || merging) return;
     setMerging(true);
     try {
-      const [pf, staged] = await Promise.all([
-        api.readPlaylist(source.file),
-        api.getStaged(source.file),
-      ]);
-      const { tracks, added, skipped } = appendMissing(draft.tracks, staged?.tracks ?? pf.tracks);
+      const { tracks, added, skipped } = appendMissing(
+        draft.tracks,
+        await effectiveTracks(source.file)
+      );
       if (added.length === 0) {
         setStatus({
           kind: "ok",
@@ -562,6 +555,42 @@ export default function Library() {
    *
    * Archived playlists aren't in the scan, so they aren't touched.
    */
+  /**
+   * What a playlist currently stands at: its staged edit if it has one, else the Spotify
+   * mirror. The same thing the sidebar counts and the library-wide panels scan, so a playlist
+   * read this way is the version the user last saw rather than the one Spotify still holds.
+   */
+  async function effectiveTracks(file: string): Promise<TrackEntry[]> {
+    const [pf, staged] = await Promise.all([api.readPlaylist(file), api.getStaged(file)]);
+    return staged?.tracks ?? pf.tracks;
+  }
+
+  /**
+   * Stage a change to one playlist's tracks.
+   *
+   * Hands `change` what the playlist currently stands at and writes the result back, keeping
+   * whatever name or description was staged on it. That last part is the step this exists for:
+   * it was hand-written at four call sites, and missing it loses a staged rename with no error.
+   *
+   * Returns null, having written nothing, when `change` left the list alone — so a caller
+   * working from a library scan that has gone stale doesn't mark a playlist modified for no
+   * reason. Otherwise it reports the staging as it was, which is what an undo needs.
+   */
+  async function restage(
+    file: string,
+    change: (current: TrackEntry[]) => TrackEntry[]
+  ): Promise<StagedBefore | null> {
+    const [pf, staged] = await Promise.all([api.readPlaylist(file), api.getStaged(file)]);
+    const current = staged?.tracks ?? pf.tracks;
+    const next = change(current);
+    if (sameTracks(current, next)) return null;
+    await api.stagePlaylist(file, staged?.name ?? null, staged?.description ?? null, next);
+    // Written behind the open editor's back, so sync its draft — otherwise a later Save puts
+    // the stale in-memory list straight back over this.
+    if (file === selected) draftApi.adoptStaged(next);
+    return { file, staged };
+  }
+
   /**
    * Put back the staged state captured before a cross-playlist write.
    *
@@ -631,20 +660,12 @@ export default function Library() {
 
     try {
       // What each playlist's staging looked like first, so the whole prune can be put back.
-      // Captured as it goes rather than up front: a failure part-way through then leaves an
+      // Collected as it goes rather than up front: a failure part-way through then leaves an
       // undo covering exactly the playlists that were actually changed.
       const before: StagedBefore[] = [];
       for (const pl of affected) {
-        const kept = removeTracksByIds(pl.tracks, ids);
-        const staged = await api.getStaged(pl.file);
-        before.push({ file: pl.file, staged });
-        await api.stagePlaylist(
-          pl.file,
-          staged?.name ?? null,
-          staged?.description ?? null,
-          kept
-        );
-        if (pl.file === selected) draftApi.adoptStaged(kept);
+        const written = await restage(pl.file, (current) => removeTracksByIds(current, ids));
+        if (written) before.push(written);
       }
       setStatus({
         kind: "ok",
@@ -664,21 +685,14 @@ export default function Library() {
   async function copyTrackToPlaylist(track: TrackEntry, target: LocalPlaylist) {
     if (target.file === selected) return; // dropping back on the open playlist: no-op
     try {
-      const pf = await api.readPlaylist(target.file);
-      const staged = await api.getStaged(target.file);
-      const current = staged?.tracks ?? pf.tracks;
-      if (current.some((t) => bareId(t.id) === bareId(track.id))) {
+      const written = await restage(
+        target.file,
+        (current) => appendMissing(current, [track]).tracks
+      );
+      if (!written) {
         setStatus({ kind: "ok", msg: `"${track.title}" is already in "${target.name}"` });
         return;
       }
-      const next = [...current, { ...track, added_at: null, added_by: null }];
-      // Preserve any staged title/description override on the target (don't clobber it).
-      await api.stagePlaylist(
-        target.file,
-        staged?.name ?? null,
-        staged?.description ?? null,
-        next
-      );
       setStatus({
         kind: "ok",
         msg: `Added "${track.title}" to "${target.name}" (staged — push to apply on Spotify)`,

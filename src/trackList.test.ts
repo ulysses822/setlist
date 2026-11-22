@@ -3,6 +3,7 @@ import type { Features, TrackEntry } from "./api";
 import {
   appendMissing,
   removeAtIndices,
+  sameTracks,
   sortTracks,
   toggleSelection,
 } from "./trackList";
@@ -195,6 +196,37 @@ describe("toggleSelection", () => {
     const before = new Set([1]);
     toggleSelection(before, plain, 2, false, null);
     expect([...before]).toEqual([1]);
+  });
+});
+
+describe("sameTracks", () => {
+  it("sees an unchanged list through a copy", () => {
+    // What a staged write needs to know: `appendMissing` and friends return a fresh array
+    // even when they changed nothing, so reference equality would report a change every time.
+    const tracks = [t("a"), t("b")];
+    expect(sameTracks(tracks, [...tracks])).toBe(true);
+    expect(sameTracks(tracks, tracks)).toBe(true);
+  });
+
+  it("notices a reorder, an addition and a removal", () => {
+    const tracks = [t("a"), t("b")];
+    expect(sameTracks(tracks, [t("b"), t("a")])).toBe(false);
+    expect(sameTracks(tracks, [t("a"), t("b"), t("c")])).toBe(false);
+    expect(sameTracks(tracks, [t("a")])).toBe(false);
+  });
+
+  it("notices a track swapped for a different release of the same song", () => {
+    // What the cross-playlist duplicate fix does: same song, different uri.
+    expect(sameTracks([t("a")], [t("a2")])).toBe(false);
+  });
+
+  it("ignores when and by whom a track was added", () => {
+    const before = [t("a", { added_at: "2020-01-01T00:00:00Z", added_by: "someone" })];
+    expect(sameTracks(before, [t("a")])).toBe(true);
+  });
+
+  it("treats two empty lists as the same", () => {
+    expect(sameTracks([], [])).toBe(true);
   });
 });
 

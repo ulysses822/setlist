@@ -105,6 +105,19 @@ export function toggleSelection(
 }
 
 /**
+ * Whether two track lists hold the same tracks in the same order.
+ *
+ * Compared by full uri, matching what the draft's own dirty check uses, so "changed" means
+ * the same thing to a staged write as it does to the editor. `added_at` and `added_by` are
+ * ignored: they describe when a track arrived, not which track it is.
+ */
+export function sameTracks(a: TrackEntry[], b: TrackEntry[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((t, i) => t.id === b[i].id);
+}
+
+/**
  * Drop the entries at `indices`. Removing several at once rather than one at a time is the
  * point: every removal renumbers everything after it, so a loop over the same index set would
  * delete the wrong tracks after the first.
