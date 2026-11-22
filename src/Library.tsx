@@ -1,12 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  api,
-  type CatalogSearch,
-  type LocalPlaylist,
-  type LocalTrackHit,
-  type SearchResult,
-  type TrackEntry,
-} from "./api";
+import { api, type LocalPlaylist, type LocalTrackHit, type TrackEntry } from "./api";
 import MetricsPanel from "./MetricsPanel";
 import { usePlaylistMetrics } from "./usePlaylistMetrics";
 import { usePlaylistDraft, type Status } from "./usePlaylistDraft";
@@ -28,7 +21,7 @@ import LibraryOverlay, {
   type Overlay,
   type OverlayKind,
 } from "./LibraryOverlay";
-import { fmtDuration, fmtTotal } from "./format";
+import { fmtTotal } from "./format";
 import {
   ConfirmModal,
   ConflictModal,
@@ -37,6 +30,8 @@ import {
   MergePlaylistModal,
 } from "./modals";
 import { useNowPlaying } from "./player";
+import AddBox from "./AddBox";
+import { usePlaylistAdder } from "./usePlaylistAdder";
 import { useGit } from "./git";
 import { diffTracks } from "./playlistDiff";
 import TrackRow, { TRACK_MIME, type RowStatus } from "./TrackRow";
@@ -98,14 +93,6 @@ export default function Library() {
   const [sortKey, setSortKey] = useState<SortKey>("index");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [status, setStatus] = useState<Status>(null);
-
-
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<CatalogSearch | null>(null);
-  const [searching, setSearching] = useState(false);
-  const [addingPlaying, setAddingPlaying] = useState(false);
-  // Id of the album or artist currently being expanded, so only that row says so.
-  const [expanding, setExpanding] = useState<string | null>(null);
 
   // Ticked rows, as draft indices (see `toggleSelection` for why not ids), and the screen
   // position a shift-click measures its range from.
@@ -191,8 +178,9 @@ export default function Library() {
     onPlaylistsChanged: () => void loadList(false),
     onLibraryChanged: () => void loadList(),
     onOpening: (file) => {
-      setResults(null);
-      setQuery("");
+      // Forward reference to the adder below, safe for the same reason `doctor.reset()` in
+      // `onOpened` is: nothing calls this until a playlist is opened, long after both exist.
+      adder.reset();
       metrics.resetFor(file); // this playlist's saved columns and mood goal
     },
     onTracksLoaded: (tracks) => metrics.loadFeatures(tracks),
@@ -240,6 +228,16 @@ export default function Library() {
     onStatus: setStatus,
     onReplaced: (track) => metrics.loadFeatures([track]),
   });
+  // Getting songs in: the catalog search and the four ways a track reaches the draft
+  // (see usePlaylistAdder). Like the doctor, it only needs the track list and a way to edit it.
+  const adder = usePlaylistAdder({
+    tracks: draft?.tracks ?? null,
+    edit,
+    onStatus: setStatus,
+    onAdded: (added) => metrics.loadFeatures(added),
+    blocked,
+  });
+
   const {
     featureMap,
     setFeatureMap,
@@ -463,37 +461,6 @@ export default function Library() {
   }
 
   /**
-   * Add the song currently playing to the open playlist.
-   *
-   * The entry is read back from Spotify rather than assembled from the player's own state,
-   * which knows the title, artists and duration but not the ISRC — and the ISRC is what the
-   * duplicate checks key on, so an entry built here would be invisible to them until the next
-   * pull refilled it.
-   */
-  async function addPlayingTrack() {
-    const uri = playingAddable?.uri;
-    if (!draft || !uri || addingPlaying) return;
-    setAddingPlaying(true);
-    try {
-      const entry = await api.trackEntry(bareId(uri));
-      // Re-checked rather than trusted from the button's disabled state: the fetch is a round
-      // trip, and the track could have been added from somewhere else while it was in flight.
-      const { tracks, added } = appendMissing(draft.tracks, [entry]);
-      if (added.length === 0) {
-        setStatus({ kind: "ok", msg: `"${entry.title}" is already in this playlist` });
-        return;
-      }
-      edit(tracks);
-      loadFeatures(added);
-      setStatus({ kind: "ok", msg: `Added "${entry.title}" — save or push when you're ready` });
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      setAddingPlaying(false);
-    }
-  }
-
-  /**
    * Append another playlist's songs to the open one, skipping the ones already here.
    *
    * Reads the source's *effective* tracks — its staged edits if it has any, else the Spotify
@@ -530,43 +497,6 @@ export default function Library() {
       setStatus({ kind: "err", msg: String(e) });
     } finally {
       setMerging(false);
-    }
-  }
-
-  /**
-   * Add every track an album or artist result stands for, skipping any already in the
-   * playlist — so adding an album you own half of adds the other half and says so, rather
-   * than doubling what's there.
-   *
-   * `fetch` is the expansion, which is a request: the search result names the album or the
-   * artist, and the tracks are read only once one is actually chosen.
-   */
-  async function addExpanded(id: string, label: string, fetch: () => Promise<TrackEntry[]>) {
-    if (!draft || expanding) return;
-    setExpanding(id);
-    try {
-      const incoming = await fetch();
-      if (incoming.length === 0) {
-        setStatus({ kind: "warn", msg: `Spotify listed no playable tracks for "${label}"` });
-        return;
-      }
-      const { tracks, added, skipped } = appendMissing(draft.tracks, incoming);
-      if (added.length === 0) {
-        setStatus({ kind: "ok", msg: `Every track from "${label}" is already here` });
-        return;
-      }
-      edit(tracks);
-      loadFeatures(added);
-      setStatus({
-        kind: "ok",
-        msg: `Added ${added.length} track${added.length === 1 ? "" : "s"} from "${label}"${
-          skipped > 0 ? `, skipped ${skipped} already here` : ""
-        }`,
-      });
-    } catch (e) {
-      setStatus({ kind: "err", msg: String(e) });
-    } finally {
-      setExpanding(null);
     }
   }
 
@@ -630,21 +560,6 @@ export default function Library() {
     }
   }
 
-  function addResult(r: SearchResult) {
-    if (!draft) return;
-    const track: TrackEntry = {
-      id: r.id,
-      isrc: r.isrc,
-      title: r.title,
-      artists: r.artists,
-      added_at: null,
-      added_by: null,
-      duration_ms: r.duration_ms,
-    };
-    edit([...draft.tracks, track]);
-    loadFeatures([track]); // background fetch for just this track
-  }
-
   // Copy a track (dragged from the open editor) into another playlist's staged edits.
   // The target isn't open in the editor, so we read its effective tracks (staged ?? canonical),
   // append, and re-stage — no Spotify call, no change to the open playlist.
@@ -683,31 +598,6 @@ export default function Library() {
     if (!draft || from === null || from === to) return;
     edit(move(draft.tracks, from, to));
   }
-
-  // Debounced Spotify search (for adding tracks). Suspended while rate-limited.
-  useEffect(() => {
-    if (query.trim() === "" || blocked) {
-      setResults(null);
-      setSearching(false); // clear a stuck "Searching…" when the box is emptied mid-search
-      return;
-    }
-    let cancelled = false;
-    setSearching(true);
-    const t = setTimeout(async () => {
-      try {
-        const r = await api.searchCatalog(query);
-        if (!cancelled) setResults(r);
-      } catch (e) {
-        if (!cancelled) setStatus({ kind: "err", msg: String(e) });
-      } finally {
-        if (!cancelled) setSearching(false);
-      }
-    }, 350);
-    return () => {
-      cancelled = true;
-      clearTimeout(t);
-    };
-  }, [query, blocked]);
 
   // Debounced cross-playlist local search (sidebar "Songs" mode).
   useEffect(() => {
@@ -824,20 +714,15 @@ export default function Library() {
   };
   const playingActive = player?.playing != null && !player.playing.paused;
 
-  // Whether the search turned anything up at all. Checked across all three kinds so an
-  // artist-only match still opens the result list.
-  const hasResults =
-    results != null &&
-    (results.tracks.length > 0 || results.albums.length > 0 || results.artists.length > 0);
-
-  // The playing song, when it's one the editor can offer to add. A local file is excluded:
-  // it has no catalog entry to read, and Spotify couldn't accept it on a push either.
+  // What the add box needs to know about the playing song. Derived here rather than in the
+  // adder because it leans on `isPlayingTrack` above: a track Spotify relinked still counts
+  // as present, so the button can't offer to add a song already sitting in the list. A local
+  // file is excluded — it has no catalog entry to read, and a push couldn't accept one.
   const playingAddable =
     player?.playing && !isLocalTrack(player.playing.uri) ? player.playing : null;
-  // Checked through `isPlayingTrack` so a track Spotify relinked still counts as present —
-  // otherwise the button would offer to add a song that's already sitting in the list.
   const playingIsHere =
     playingAddable != null && (draft?.tracks ?? []).some((t) => isPlayingTrack(t.id));
+
   // The playlist context playback was started from — marks that playlist in the sidebar.
   const playingContext = player?.playing?.contextUri ?? null;
 
@@ -1348,111 +1233,12 @@ export default function Library() {
               </div>
             )}
 
-            <div className="add-box">
-              <div className="add-row">
-                <input
-                  className="filter"
-                  name="spotify-track-search"
-                  aria-label="Search Spotify for a song, album or artist"
-                  placeholder={
-                    blocked
-                      ? "Spotify search paused — rate-limited"
-                      : "Search Spotify for a song, album or artist…"
-                  }
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  disabled={blocked}
-                />
-                {playingAddable && (
-                  <button
-                    className="btn ghost small"
-                    onClick={() => void addPlayingTrack()}
-                    disabled={addingPlaying || playingIsHere || blocked}
-                    title={
-                      playingIsHere
-                        ? `"${playingAddable.trackName}" is already in this playlist`
-                        : `Add "${playingAddable.trackName}" to this playlist`
-                    }
-                  >
-                    {addingPlaying ? "Adding…" : "+ Playing song"}
-                  </button>
-                )}
-              </div>
-              {(searching || hasResults) && (
-                <ul className="results">
-                  {searching && <li className="hint pad">Searching…</li>}
-                  {results && results.tracks.length > 0 && (
-                    <>
-                      <li className="results-head">Songs</li>
-                      {results.tracks.map((r) => (
-                        <li key={r.id}>
-                          <button className="result" onClick={() => addResult(r)}>
-                            <span className="r-title">{r.title}</span>
-                            <span className="r-meta">
-                              {r.artists.join(", ")}
-                              {r.album ? ` · ${r.album}` : ""}
-                            </span>
-                            <span className="r-dur">{fmtDuration(r.duration_ms)}</span>
-                            <span className="r-add">+ add</span>
-                          </button>
-                        </li>
-                      ))}
-                    </>
-                  )}
-                  {results && results.albums.length > 0 && (
-                    <>
-                      <li className="results-head">Albums</li>
-                      {results.albums.map((a) => (
-                        <li key={a.id}>
-                          <button
-                            className="result"
-                            disabled={expanding != null || blocked}
-                            onClick={() =>
-                              void addExpanded(a.id, a.name, () => api.albumTracks(a.id))
-                            }
-                          >
-                            <span className="r-title">{a.name}</span>
-                            <span className="r-meta">
-                              {[
-                                a.artists.join(", "),
-                                a.year,
-                                `${a.total_tracks} track${a.total_tracks === 1 ? "" : "s"}`,
-                              ]
-                                .filter(Boolean)
-                                .join(" · ")}
-                            </span>
-                            <span className="r-add">
-                              {expanding === a.id ? "adding…" : "+ add all"}
-                            </span>
-                          </button>
-                        </li>
-                      ))}
-                    </>
-                  )}
-                  {results && results.artists.length > 0 && (
-                    <>
-                      <li className="results-head">Artists</li>
-                      {results.artists.map((a) => (
-                        <li key={a.id}>
-                          <button
-                            className="result"
-                            disabled={expanding != null || blocked}
-                            onClick={() =>
-                              void addExpanded(a.id, a.name, () => api.artistTopTracks(a.id))
-                            }
-                          >
-                            <span className="r-title">{a.name}</span>
-                            <span className="r-add">
-                              {expanding === a.id ? "adding…" : "+ top tracks"}
-                            </span>
-                          </button>
-                        </li>
-                      ))}
-                    </>
-                  )}
-                </ul>
-              )}
-            </div>
+            <AddBox
+              adder={adder}
+              blocked={blocked}
+              playing={playingAddable}
+              playingIsHere={playingIsHere}
+            />
 
             {draft.tracks.length > 0 && (
               <div className="metrics-strip">
