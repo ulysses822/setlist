@@ -28,6 +28,12 @@ against Spotify.](docs/screenshots/library.png)
 - Edits that cancel out clean themselves up: add a song, remove it again, and the
   playlist is simply *unmodified* — no phantom "unsaved changes".
 - **Revert** to the last synced state, any time.
+- Songs go in without typing their names: search adds a track, a **whole album** or an
+  **artist's top tracks**, the song currently **playing** goes in with one click, and
+  another playlist can be **merged in** — each skipping anything already there.
+- Sort the editor by title, duration or any audio feature, then **apply that order** to the
+  playlist. Like every other edit it is staged and diffed first, so you see what moved
+  before Spotify does.
 
 ### Keep the library clean
 - The **cleanup doctor** scans everything: exact duplicates, near-duplicates (the same

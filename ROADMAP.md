@@ -23,8 +23,8 @@ arrive as a staged draft you review, not a playlist that rewrites itself.
 **Recovering a deleted playlist.** Delete one before its first commit and it's gone — a poor
 edge in an app whose argument is that you don't lose things.
 
-Considered, not started: re-checking availability without a full re-pull, merging two
-playlists, last-played as an editor column, a set-aside for in-progress edits.
+Considered, not started: re-checking availability without a full re-pull, last-played as an
+editor column, a set-aside for in-progress edits.
 
 ## Not happening
 
