@@ -30,17 +30,39 @@ pub(crate) const API: &str = "https://api.spotify.com/v1";
 /// only exists so a garbage id is rejected — and echoed back — at a sane size.
 const MAX_ID_LEN: usize = 64;
 
-/// `{API}/playlists/{id}`, but only once `id` is verifiably a Spotify id.
+/// Whether `id` is the shape Spotify issues: non-empty, short, and base-62.
 ///
-/// Playlist ids reach us from the JSON in the data folder — a git repo, which can be cloned
-/// from anywhere — and are then interpolated into a request path sent with a full-scope
-/// token. That makes them untrusted input in the one place a URL is most forgeable: the `url`
-/// crate resolves dot segments before sending, so an id of `../me/player/pause` turns a PUT
-/// on a playlist into a PUT on the player, and a `?` or `#` quietly rewrites whatever query
-/// the caller appended. Spotify ids are base-62, so anything else is not an id at all —
-/// reject it rather than percent-encode it, since an escaped slash only buys a puzzling 404.
+/// The one check standing between an id and a request path. Ids reach us from the JSON in the
+/// data folder — a git repo, which can be cloned from anywhere — and from the webview, and are
+/// then interpolated into a request path sent with a full-scope token. That makes them
+/// untrusted input in the one place a URL is most forgeable: the `url` crate resolves dot
+/// segments before sending, so an id of `../me/player/pause` turns a PUT on a playlist into a
+/// PUT on the player, and a `?` or `#` quietly rewrites whatever query the caller appended.
+/// Spotify ids are base-62, so anything else is not an id at all — reject it rather than
+/// percent-encode it, since an escaped slash only buys a puzzling 404.
+fn is_spotify_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= MAX_ID_LEN && id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// `{API}/{kind}/{id}` for a read of a catalog resource — a track, an album, an artist.
+///
+/// `kind` is always a literal from this file, never input; `id` is checked for the reason
+/// `is_spotify_id` gives. The error doesn't name the data folder the way `playlist_url`'s
+/// does, because these ids come back from a search rather than from disk.
+pub(crate) fn catalog_url(kind: &str, id: &str) -> Result<String, String> {
+    if !is_spotify_id(id) {
+        return Err(format!(
+            "{:?} is not a Spotify id.",
+            id.chars().take(MAX_ID_LEN).collect::<String>()
+        ));
+    }
+    Ok(format!("{API}/{kind}/{id}"))
+}
+
+/// `{API}/playlists/{id}`, but only once `id` is verifiably a Spotify id — see
+/// `is_spotify_id` for what that is guarding against.
 pub(crate) fn playlist_url(id: &str) -> Result<String, String> {
-    if id.is_empty() || id.len() > MAX_ID_LEN || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+    if !is_spotify_id(id) {
         return Err(format!(
             "{:?} is not a Spotify playlist id — check its spotify_id in your data folder.",
             id.chars().take(MAX_ID_LEN).collect::<String>()
@@ -831,6 +853,45 @@ pub async fn search_tracks(
         .collect())
 }
 
+/// A Spotify track object as a playlist entry.
+///
+/// `added_at` / `added_by` stay unset: Spotify stamps those when the push actually adds the
+/// track, so filling them in here would date the addition to whenever Setlist happened to
+/// read the track.
+///
+/// When `market` relinked the track to a local equivalent, the id kept is `linked_from` —
+/// the one the catalog (and therefore every other playlist file) references. Storing the
+/// relinked uri instead would make the next pull read as though the track had been swapped.
+pub(crate) fn entry_from(t: TrackObj) -> TrackEntry {
+    TrackEntry {
+        id: t.linked_from.map(|l| l.uri).unwrap_or(t.uri),
+        isrc: t.external_ids.and_then(|e| e.isrc),
+        title: t.name,
+        artists: t.artists.into_iter().map(|a| a.name).collect(),
+        added_at: None,
+        added_by: None,
+        duration_ms: t.duration_ms,
+        is_playable: t.is_playable,
+    }
+}
+
+/// Read one track from the catalog as a playlist entry.
+///
+/// This exists so "add the song that's playing" produces the same entry a pull would. The
+/// webview's player state knows the title, artists and duration but not the ISRC, and the
+/// ISRC is what the duplicate checks key on — a track added without one is invisible to them
+/// until the next pull refills it.
+pub async fn track_entry(
+    state: &AppState,
+    client_id: String,
+    track_id: String,
+) -> Result<TrackEntry, String> {
+    // `market=from_token` so `is_playable` comes back, matching what a pull records.
+    let url = format!("{}?market=from_token", catalog_url("tracks", &track_id)?);
+    let track: TrackObj = get_json(state, &client_id, &url).await?;
+    Ok(entry_from(track))
+}
+
 // --- Drop-in replacement search for unavailable (greyed-out) tracks ---------------------
 
 /// Normalize text for loose comparison: lowercase, alphanumerics only, single-spaced.
@@ -1064,6 +1125,91 @@ mod tests {
         // Well-formed but absurd is still rejected, so the message can safely quote it.
         assert!(playlist_url(&"a".repeat(MAX_ID_LEN + 1)).is_err());
         assert!(playlist_url(&"a".repeat(MAX_ID_LEN)).is_ok());
+    }
+
+    #[test]
+    fn catalog_url_checks_its_id_as_closely_as_a_playlist_id() {
+        assert_eq!(
+            catalog_url("tracks", "4cOdK2wGLETKBW3PvgPWqT").unwrap(),
+            "https://api.spotify.com/v1/tracks/4cOdK2wGLETKBW3PvgPWqT"
+        );
+        assert_eq!(
+            catalog_url("albums", "1234567890abcdefABCDEF").unwrap(),
+            "https://api.spotify.com/v1/albums/1234567890abcdefABCDEF"
+        );
+
+        // These ids come from the webview rather than the data folder, which makes them no
+        // more trustworthy — the same escapes have to be refused here.
+        for bad in [
+            "",
+            "../me/player/pause",
+            "abc/tracks",
+            "abc?market=x",
+            "abc#frag",
+            "abc%2f",
+            "spotify:track:abc",
+            "abc def",
+            &"a".repeat(MAX_ID_LEN + 1),
+        ] {
+            assert!(
+                catalog_url("tracks", bad).is_err(),
+                "should have rejected {bad:?}"
+            );
+        }
+    }
+
+    /// A local file has no catalog entry, and `bareId` on the frontend leaves its whole
+    /// `spotify:local:…` uri intact — so one arriving here is refused by the id check rather
+    /// than turning into a request for a track that cannot exist.
+    #[test]
+    fn a_local_file_uri_is_not_a_catalog_id() {
+        assert!(catalog_url("tracks", "spotify:local:::Some+Song:210").is_err());
+    }
+
+    #[test]
+    fn a_fetched_track_becomes_an_entry_spotify_would_recognize() {
+        let raw = serde_json::json!({
+            "uri": "spotify:track:4cOdK2wGLETKBW3PvgPWqT",
+            "name": "Bohemian Rhapsody",
+            "artists": [{ "name": "Queen" }],
+            "external_ids": { "isrc": "GBUM71029604" },
+            "album": { "name": "A Night at the Opera" },
+            "duration_ms": 354_320,
+            "is_playable": true
+        });
+        let entry = entry_from(serde_json::from_value(raw).unwrap());
+
+        assert_eq!(entry.id, "spotify:track:4cOdK2wGLETKBW3PvgPWqT");
+        assert_eq!(entry.title, "Bohemian Rhapsody");
+        assert_eq!(entry.artists, vec!["Queen".to_string()]);
+        // The ISRC is the point of reading the track at all: it is what the duplicate checks
+        // key on, and the webview's player state has no idea what it is.
+        assert_eq!(entry.isrc.as_deref(), Some("GBUM71029604"));
+        assert_eq!(entry.duration_ms, Some(354_320));
+        assert_eq!(entry.is_playable, Some(true));
+        // Spotify stamps these on the push; claiming a time here would date the addition to
+        // whenever the track happened to be read.
+        assert!(entry.added_at.is_none());
+        assert!(entry.added_by.is_none());
+    }
+
+    #[test]
+    fn a_relinked_track_is_stored_under_the_id_the_playlists_reference() {
+        let raw = serde_json::json!({
+            // What `market=from_token` hands back: the uri playable in this market…
+            "uri": "spotify:track:LOCALMARKETVERSION01",
+            "name": "Song",
+            "artists": [{ "name": "A" }],
+            // …and the original it was substituted for, which is what playlist files hold.
+            "linked_from": { "uri": "spotify:track:4cOdK2wGLETKBW3PvgPWqT" }
+        });
+        let entry = entry_from(serde_json::from_value(raw).unwrap());
+
+        assert_eq!(entry.id, "spotify:track:4cOdK2wGLETKBW3PvgPWqT");
+        // Nothing was supplied for these, and absent must not read as a value.
+        assert!(entry.isrc.is_none());
+        assert!(entry.duration_ms.is_none());
+        assert!(entry.is_playable.is_none());
     }
 
     #[test]

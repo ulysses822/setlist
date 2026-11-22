@@ -436,6 +436,18 @@ async fn search_tracks(
     spotify::search_tracks(&state, require_client_id(&app)?, query).await
 }
 
+/// Read one catalog track as a playlist entry — what "add the song that's playing" adds.
+/// Spotify is asked rather than the webview trusted, so the entry carries the ISRC and
+/// playability a pulled track has.
+#[tauri::command]
+async fn track_entry(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    track_id: String,
+) -> Result<TrackEntry, String> {
+    spotify::track_entry(&state, require_client_id(&app)?, track_id).await
+}
+
 /// Find a near-identical, playable stand-in for an unavailable (greyed-out) track — checked
 /// against the local library first, then Spotify search.
 #[tauri::command]
@@ -661,6 +673,7 @@ pub fn run() {
             track_playlists,
             search_local_tracks,
             search_tracks,
+            track_entry,
             suggest_replacement,
             push_playlist,
             sync_status,

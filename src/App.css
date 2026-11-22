@@ -926,6 +926,23 @@ body {
   margin-bottom: 14px;
 }
 
+/* The search field keeps the whole width when nothing is playing, so the row collapses to
+   just the input rather than leaving a gap where the button would be. */
+.add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.add-row .filter {
+  flex: 1;
+  min-width: 0;
+}
+
+.add-row .btn {
+  white-space: nowrap;
+}
+
 .results {
   list-style: none;
   margin: 6px 0 0;

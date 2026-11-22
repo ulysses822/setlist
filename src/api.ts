@@ -279,6 +279,12 @@ export const api = {
   unfollowArchived: () => invoke<UnfollowReport>("unfollow_archived"),
   followPlaylist: (file: string) => invoke<void>("follow_playlist", { file }),
   searchTracks: (query: string) => invoke<SearchResult[]>("search_tracks", { query }),
+  /**
+   * Read one catalog track as a playlist entry, by bare track id. Asks Spotify rather than
+   * assembling the entry here, so an added track carries the ISRC the duplicate checks need
+   * — the player's own state doesn't know it.
+   */
+  trackEntry: (trackId: string) => invoke<TrackEntry>("track_entry", { trackId }),
   suggestReplacement: (track: TrackEntry) =>
     invoke<ReplacementSuggestion | null>("suggest_replacement", { track }),
   searchLocalTracks: (query: string) =>

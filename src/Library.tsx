@@ -12,7 +12,7 @@ import { usePlaylistDraft, type Status } from "./usePlaylistDraft";
 import { usePlaylistLibrary } from "./usePlaylistLibrary";
 import { bareId, FEATURE_META, isLocalTrack } from "./metricsCalc";
 import { removeExactDuplicates, type CrossDupGroup } from "./lint";
-import { sortTracks, type SortDir, type SortKey } from "./trackList";
+import { appendMissing, sortTracks, type SortDir, type SortKey } from "./trackList";
 import { usePlaylistDoctor } from "./usePlaylistDoctor";
 import IssuesStrip from "./IssuesStrip";
 import LibraryOverlay, {
@@ -94,6 +94,7 @@ export default function Library() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
+  const [addingPlaying, setAddingPlaying] = useState(false);
 
   const dragIndex = useRef<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
@@ -396,6 +397,37 @@ export default function Library() {
     }
   }
 
+  /**
+   * Add the song currently playing to the open playlist.
+   *
+   * The entry is read back from Spotify rather than assembled from the player's own state,
+   * which knows the title, artists and duration but not the ISRC — and the ISRC is what the
+   * duplicate checks key on, so an entry built here would be invisible to them until the next
+   * pull refilled it.
+   */
+  async function addPlayingTrack() {
+    const uri = playingAddable?.uri;
+    if (!draft || !uri || addingPlaying) return;
+    setAddingPlaying(true);
+    try {
+      const entry = await api.trackEntry(bareId(uri));
+      // Re-checked rather than trusted from the button's disabled state: the fetch is a round
+      // trip, and the track could have been added from somewhere else while it was in flight.
+      const { tracks, added } = appendMissing(draft.tracks, [entry]);
+      if (added.length === 0) {
+        setStatus({ kind: "ok", msg: `"${entry.title}" is already in this playlist` });
+        return;
+      }
+      edit(tracks);
+      loadFeatures(added);
+      setStatus({ kind: "ok", msg: `Added "${entry.title}" — save or push when you're ready` });
+    } catch (e) {
+      setStatus({ kind: "err", msg: String(e) });
+    } finally {
+      setAddingPlaying(false);
+    }
+  }
+
   function addResult(r: SearchResult) {
     if (!draft) return;
     const track: TrackEntry = {
@@ -582,6 +614,15 @@ export default function Library() {
     return b === playingId || b === playingLinkedId;
   };
   const playingActive = player?.playing != null && !player.playing.paused;
+
+  // The playing song, when it's one the editor can offer to add. A local file is excluded:
+  // it has no catalog entry to read, and Spotify couldn't accept it on a push either.
+  const playingAddable =
+    player?.playing && !isLocalTrack(player.playing.uri) ? player.playing : null;
+  // Checked through `isPlayingTrack` so a track Spotify relinked still counts as present —
+  // otherwise the button would offer to add a song that's already sitting in the list.
+  const playingIsHere =
+    playingAddable != null && (draft?.tracks ?? []).some((t) => isPlayingTrack(t.id));
   // The playlist context playback was started from — marks that playlist in the sidebar.
   const playingContext = player?.playing?.contextUri ?? null;
 
@@ -1074,19 +1115,35 @@ export default function Library() {
             )}
 
             <div className="add-box">
-              <input
-                className="filter"
-                name="spotify-track-search"
-                aria-label="Search Spotify to add a track"
-                placeholder={
-                  blocked
-                    ? "Spotify search paused — rate-limited"
-                    : "Search Spotify to add a track…"
-                }
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                disabled={blocked}
-              />
+              <div className="add-row">
+                <input
+                  className="filter"
+                  name="spotify-track-search"
+                  aria-label="Search Spotify to add a track"
+                  placeholder={
+                    blocked
+                      ? "Spotify search paused — rate-limited"
+                      : "Search Spotify to add a track…"
+                  }
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  disabled={blocked}
+                />
+                {playingAddable && (
+                  <button
+                    className="btn ghost small"
+                    onClick={() => void addPlayingTrack()}
+                    disabled={addingPlaying || playingIsHere || blocked}
+                    title={
+                      playingIsHere
+                        ? `"${playingAddable.trackName}" is already in this playlist`
+                        : `Add "${playingAddable.trackName}" to this playlist`
+                    }
+                  >
+                    {addingPlaying ? "Adding…" : "+ Playing song"}
+                  </button>
+                )}
+              </div>
               {(searching || results.length > 0) && (
                 <ul className="results">
                   {searching && <li className="hint pad">Searching…</li>}
