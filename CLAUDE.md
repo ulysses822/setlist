@@ -33,6 +33,20 @@ verification — its `rust` job runs on `windows-latest` and gates `cargo fmt --
 verified it, not that the tests were run, and never hand-wave a `cargo fmt` result — a
 formatting miss fails the build and is the cheapest thing to get wrong from here.
 
+Lockfile bumps are the exception to all of that: cargo's resolver works here even though the
+compiler does not. `cargo update`, `cargo metadata --locked`, `cargo fetch --locked` and
+`cargo audit` only read `Cargo.lock`, so clearing an advisory is fully verifiable in-session.
+
+Edit the lockfile by hand when you do. `cargo update -p <crate>` re-resolves shared
+`windows-sys` edges *downward* — 0.61.2 to 0.59.0, or to 0.52.0 under `--precise` — for the
+crates whose version ranges are wide enough to allow it (`dirs-sys`, `errno`, `rustix`,
+`tempfile`, `winapi-util`), and downgrades `getrandom` inside `tempfile`. Those resolutions are
+the resolver's own and are legal, but they move crates no advisory named, they only ever compile
+on Windows, and they bury a five-line security fix in a dozen unrelated ones. Change the
+`version` and `checksum` pairs directly instead, then prove it rather than assuming: `cargo
+metadata --locked` fails if the lockfile no longer satisfies every requirement, and `cargo fetch
+--locked` checks the new checksums against the registry.
+
 The same limit applies to UI work: "run the app and say what you clicked" is impossible on
 Linux, so say that instead of skipping the question.
 
