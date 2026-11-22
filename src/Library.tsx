@@ -12,7 +12,7 @@ import { usePlaylistMetrics } from "./usePlaylistMetrics";
 import { usePlaylistDraft, type Status } from "./usePlaylistDraft";
 import { usePlaylistLibrary } from "./usePlaylistLibrary";
 import { bareId, FEATURE_META, isLocalTrack } from "./metricsCalc";
-import { removeExactDuplicates, type CrossDupGroup } from "./lint";
+import { removeExactDuplicates, removeTracksByIds, type CrossDupGroup } from "./lint";
 import {
   appendMissing,
   removeAtIndices,
@@ -570,6 +570,66 @@ export default function Library() {
     }
   }
 
+  /**
+   * Remove songs from every playlist they appear in — what the stale view was for, and where
+   * it used to stop: it found your dead tracks and then asked you to open each playlist and
+   * do it yourself.
+   *
+   * Stages each affected playlist rather than writing to Spotify, so a removal across a dozen
+   * playlists is still a dozen reviewable diffs. Same path as the cross-playlist duplicate
+   * fix, including syncing the open editor's draft — staging behind its back would let a later
+   * Save clobber the pruning with a stale track list.
+   *
+   * Archived playlists aren't in the scan, so they aren't touched.
+   */
+  async function pruneEverywhere(trackIds: string[]) {
+    const scanned = overlay?.kind === "stale" ? overlay.data : null;
+    if (!scanned || trackIds.length === 0) return;
+    const ids = new Set(trackIds.map(bareId));
+    const affected = scanned.filter((pl) => pl.tracks.some((t) => ids.has(bareId(t.id))));
+    const songs = `${trackIds.length} song${trackIds.length === 1 ? "" : "s"}`;
+
+    // Zero affected playlists means the scan behind the panel has gone stale — say so rather
+    // than reporting a removal "across 0 playlists" that didn't happen.
+    if (affected.length === 0) {
+      setStatus({
+        kind: "err",
+        msg: "Nothing to remove — the scan is out of date, it has been refreshed.",
+      });
+      void openStale();
+      return;
+    }
+
+    const lists = `${affected.length} playlist${affected.length === 1 ? "" : "s"}`;
+    const ok = await confirmDialog(
+      `Remove ${songs} from ${lists}? The removals are staged, so you can review each playlist's changes before anything reaches Spotify.`,
+      "Remove"
+    );
+    if (!ok) return;
+
+    try {
+      for (const pl of affected) {
+        const kept = removeTracksByIds(pl.tracks, ids);
+        const staged = await api.getStaged(pl.file);
+        await api.stagePlaylist(
+          pl.file,
+          staged?.name ?? null,
+          staged?.description ?? null,
+          kept
+        );
+        if (pl.file === selected) draftApi.adoptStaged(kept);
+      }
+      setStatus({
+        kind: "ok",
+        msg: `Removed ${songs} from ${lists} (staged — open each to review and push)`,
+      });
+      void openStale(); // rescan so the pruned songs are gone from the list
+      void loadList();
+    } catch (e) {
+      setStatus({ kind: "err", msg: String(e) });
+    }
+  }
+
   function addResult(r: SearchResult) {
     if (!draft) return;
     const track: TrackEntry = {
@@ -1117,6 +1177,7 @@ export default function Library() {
             onOpenPlaylist={(file) => void openPlaylist(file)}
             onOpenTrack={(file, trackId) => void openPlaylist(file, trackId)}
             onNormalize={(group, keepId) => void normalizeCrossDup(group, keepId)}
+            onPrune={pruneEverywhere}
             onError={(msg) => setStatus({ kind: "err", msg })}
           />
         ) : !draft ? (

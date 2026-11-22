@@ -2,7 +2,7 @@
 // played it, so you can find tracks worth pruning. Curation aid, not a stats dashboard —
 // the signal is "last played" / "never played", honest about the logging window.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { HistoryReport, NamedPlaylist, PlayStat, TrackEntry } from "./api";
 import { bareId, isLocalTrack } from "./metricsCalc";
 import { useNowPlaying } from "./player";
@@ -37,6 +37,7 @@ export default function StaleView({
   busy,
   onClose,
   onOpenTrack,
+  onPrune,
 }: {
   data: NamedPlaylist[] | null;
   history: HistoryReport | null;
@@ -44,8 +45,17 @@ export default function StaleView({
   onClose: () => void;
   /** Open a playlist in the editor, centered on the given track (to prune it there). */
   onOpenTrack: (file: string, trackId: string) => void;
+  /**
+   * Remove these songs (bare track ids) from every playlist they appear in. Staged rather
+   * than pushed, so the caller leaves each playlist reviewable.
+   */
+  onPrune: (trackIds: string[]) => Promise<void>;
 }) {
   const [filter, setFilter] = useState("");
+  // Ticked songs, by bare id — here a song is one thing however many playlists hold it,
+  // which is the opposite of the editor, where the same recording twice is two rows.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [pruning, setPruning] = useState(false);
   const [sort, setSort] = useState<StaleSort>("stale");
   const [threshold, setThreshold] = useState<Threshold>("90");
   const player = useNowPlaying();
@@ -122,6 +132,38 @@ export default function StaleView({
     return filtered;
   }, [allSongs, statByBare, filter, sort, threshold, history]);
 
+  // A prune reloads the scan, and the songs that went are no longer in it. Dropping the
+  // selection then keeps the count honest instead of carrying ids nothing displays.
+  useEffect(() => {
+    setPicked(new Set());
+  }, [data]);
+
+  /** How many playlists a removal would actually touch — what the button promises. */
+  const affectedPlaylists = useMemo(() => {
+    const files = new Set<string>();
+    for (const r of rows) {
+      if (!picked.has(bareId(r.track.id))) continue;
+      for (const p of r.playlists) files.add(p.file);
+    }
+    return files.size;
+  }, [rows, picked]);
+
+  const allShownPicked = rows.length > 0 && rows.every((r) => picked.has(bareId(r.track.id)));
+
+  function toggleAllShown() {
+    setPicked(allShownPicked ? new Set() : new Set(rows.map((r) => bareId(r.track.id))));
+  }
+
+  async function prunePicked() {
+    if (picked.size === 0 || pruning) return;
+    setPruning(true);
+    try {
+      await onPrune([...picked]);
+    } finally {
+      setPruning(false);
+    }
+  }
+
   const noLog = !history || !history.has_file || history.tracked_since == null;
   const since = history?.tracked_since
     ? new Date(history.tracked_since).toLocaleDateString()
@@ -196,7 +238,31 @@ export default function StaleView({
                 </button>
               ))}
             </div>
+            {/* Selecting every row the filters left is the normal way in: narrow to "not
+                played in 6 months", take the lot, remove it. */}
+            <button className="link" onClick={toggleAllShown} disabled={rows.length === 0}>
+              {allShownPicked ? "Clear selection" : `Select all ${rows.length}`}
+            </button>
           </div>
+
+          {picked.size > 0 && (
+            <p className="sel-bar">
+              <span>
+                <strong>{picked.size}</strong> selected, in {affectedPlaylists} playlist
+                {affectedPlaylists === 1 ? "" : "s"}
+              </span>
+              <button
+                className="btn ghost small danger"
+                onClick={() => void prunePicked()}
+                disabled={pruning}
+              >
+                {pruning ? "Removing…" : "Remove from every playlist"}
+              </button>
+              <button className="link" onClick={() => setPicked(new Set())} disabled={pruning}>
+                Clear
+              </button>
+            </p>
+          )}
 
           {busy ? (
             <p className="hint pad">Loading…</p>
@@ -214,13 +280,27 @@ export default function StaleView({
                 const isPlaying =
                   playingId != null &&
                   (bareId(track.id) === playingId || bareId(track.id) === playingLinkedId);
+                const id = bareId(track.id);
                 return (
                   <li
-                    key={bareId(track.id)}
+                    key={id}
                     className={`lib-row stale-row ${unavailable ? "unavailable" : ""} ${
                       isPlaying ? "playing" : ""
-                    }`}
+                    } ${picked.has(id) ? "selected" : ""}`}
                   >
+                    <input
+                      type="checkbox"
+                      className="t-pick"
+                      checked={picked.has(id)}
+                      aria-label={`Select "${track.title}"`}
+                      onChange={() =>
+                        setPicked((cur) => {
+                          const next = new Set(cur);
+                          if (!next.delete(id)) next.add(id);
+                          return next;
+                        })
+                      }
+                    />
                     <button
                       className="lib-play"
                       title={local ? "Local file" : unavailable ? "Unavailable on Spotify" : "Play"}

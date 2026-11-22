@@ -1811,6 +1811,10 @@ body {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+.lib-row.selected {
+  background: rgb(var(--accent-rgb) / 0.08);
+}
+
 .lib-row.unavailable .t-title-text,
 .lib-row.unavailable .lib-artists,
 .lib-row.unavailable .lib-dur {
@@ -1884,7 +1888,7 @@ body {
 
 /* Stale-track view: same row, with "last played" + play-count columns before the chips. */
 .stale-row {
-  grid-template-columns: 24px minmax(140px, 1.3fr) 1fr 96px 44px 1.4fr;
+  grid-template-columns: 20px 24px minmax(140px, 1.3fr) 1fr 96px 44px 1.4fr;
 }
 
 .stale-when {
