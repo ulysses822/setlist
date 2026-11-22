@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type LocalPlaylist, type LocalTrackHit, type TrackEntry } from "./api";
+import {
+  api,
+  type LocalPlaylist,
+  type LocalTrackHit,
+  type StagedEdit,
+  type TrackEntry,
+} from "./api";
 import MetricsPanel from "./MetricsPanel";
 import { usePlaylistMetrics } from "./usePlaylistMetrics";
 import { usePlaylistDraft, type Status } from "./usePlaylistDraft";
@@ -38,6 +44,17 @@ import TrackRow, { TRACK_MIME, type RowStatus } from "./TrackRow";
 import { useRateLimit } from "./rateLimit";
 
 type SidebarMode = "playlists" | "songs";
+
+/**
+ * One playlist's staging as it was before a cross-playlist write, which is all it takes to
+ * put that write back. `staged` is null when the playlist had no staged edit at all — a
+ * distinct state from an empty one, and the difference between "unmodified" and "modified to
+ * match the mirror" in the sidebar.
+ */
+interface StagedBefore {
+  file: string;
+  staged: StagedEdit | null;
+}
 
 // Column choices, mood goals and the outlier method all live in the data folder now — see
 // prefs.ts for why. These stay synchronous because they run during render; prefs holds both
@@ -274,7 +291,9 @@ export default function Library() {
   // Success/status popups are transient: auto-dismiss after a few seconds. Errors stay
   // until dismissed so they aren't missed.
   useEffect(() => {
-    if (status?.kind !== "ok") return;
+    // A message offering an undo stays until it's used or dismissed: it's an offer, not a
+    // report, and four seconds is not long enough to decide.
+    if (status?.kind !== "ok" || status.undo) return;
     const t = setTimeout(() => setStatus(null), 4000);
     return () => clearTimeout(t);
   }, [status]);
@@ -394,6 +413,18 @@ export default function Library() {
       ]);
       return { kind: "stale", data, history };
     });
+
+  /**
+   * The editor as it is *now*, for callbacks that outlive the render they were made in.
+   *
+   * `restoreStaged` is reached from a status-line message that can sit on screen for minutes,
+   * so its captured `draftApi` would be several renders old by the time it runs — and a stale
+   * `openPlaylist` auto-stages using a stale `dirty`/`draft`, which would quietly drop edits
+   * made after the message appeared. Written during render, the same way `errorRef` is in
+   * player.tsx, and for the same reason.
+   */
+  const liveRef = useRef({ draftApi, overlayKind: overlay?.kind, openStale: () => openStale() });
+  liveRef.current = { draftApi, overlayKind: overlay?.kind, openStale: () => openStale() };
 
   const openStatus = () =>
     openOverlay("status", async () => {
@@ -531,6 +562,48 @@ export default function Library() {
    *
    * Archived playlists aren't in the scan, so they aren't touched.
    */
+  /**
+   * Put back the staged state captured before a cross-playlist write.
+   *
+   * The editor's Undo button can't reach these: the prune staged playlists that aren't open,
+   * so taking it back means restoring each of them on disk. A playlist that had no staged
+   * edit before gets none again rather than an empty one, which is the difference between
+   * "unmodified" and "modified to match the mirror" in the sidebar.
+   *
+   * The open playlist is reloaded rather than patched in memory, because it may have gone
+   * from staged to unstaged or the other way, and re-reading from disk is the one thing that
+   * is right either way.
+   */
+  async function restoreStaged(before: StagedBefore[]) {
+    const live = liveRef.current;
+    const wasStale = live.overlayKind === "stale";
+    try {
+      for (const { file, staged } of before) {
+        if (staged) {
+          await api.stagePlaylist(file, staged.name, staged.description, staged.tracks);
+        } else {
+          await api.clearStaged(file);
+        }
+      }
+      const open = live.draftApi.selected;
+      if (open && before.some((b) => b.file === open)) {
+        // Closes whichever panel was over the editor, and stages any edits made since the
+        // message appeared before re-reading — which is why this goes through the live ref.
+        await live.draftApi.openPlaylist(open);
+      }
+      if (wasStale) await live.openStale(); // put the panel back, rescanned
+      const n = before.length;
+      // Set last: openPlaylist clears the status line on its way through.
+      setStatus({
+        kind: "ok",
+        msg: `Put ${n} playlist${n === 1 ? "" : "s"} back the way they were`,
+      });
+      void loadList();
+    } catch (e) {
+      setStatus({ kind: "err", msg: String(e) });
+    }
+  }
+
   async function pruneEverywhere(trackIds: string[]) {
     const scanned = overlay?.kind === "stale" ? overlay.data : null;
     if (!scanned || trackIds.length === 0) return;
@@ -557,9 +630,14 @@ export default function Library() {
     if (!ok) return;
 
     try {
+      // What each playlist's staging looked like first, so the whole prune can be put back.
+      // Captured as it goes rather than up front: a failure part-way through then leaves an
+      // undo covering exactly the playlists that were actually changed.
+      const before: StagedBefore[] = [];
       for (const pl of affected) {
         const kept = removeTracksByIds(pl.tracks, ids);
         const staged = await api.getStaged(pl.file);
+        before.push({ file: pl.file, staged });
         await api.stagePlaylist(
           pl.file,
           staged?.name ?? null,
@@ -571,6 +649,7 @@ export default function Library() {
       setStatus({
         kind: "ok",
         msg: `Removed ${songs} from ${lists} (staged — open each to review and push)`,
+        undo: () => restoreStaged(before),
       });
       void openStale(); // rescan so the pruned songs are gone from the list
       void loadList();
@@ -1480,6 +1559,11 @@ export default function Library() {
       {status && (
         <p className={`status ${status.kind} lib-status`}>
           <span>{status.msg}</span>
+          {status.undo && (
+            <button className="link" onClick={() => void status.undo?.()}>
+              Undo
+            </button>
+          )}
           <button
             className="msg-close"
             onClick={() => setStatus(null)}

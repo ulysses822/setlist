@@ -27,7 +27,19 @@ import { popSnapshot, recordSnapshot, type Snapshot } from "./undo";
  * A message for the host's status line. Lives here because this is where most of them are
  * raised.
  */
-export type Status = { kind: "ok" | "warn" | "err"; msg: string } | null;
+export type Status = {
+  kind: "ok" | "warn" | "err";
+  msg: string;
+  /**
+   * Offered beside the message when what was just done can be taken back.
+   *
+   * Only for operations that wrote *outside* the open draft — the editor's own edits are
+   * undone with the Undo button, which doesn't need a message to hang off and shouldn't
+   * depend on one still being on screen. A message carrying this one isn't auto-dismissed,
+   * since it's an offer rather than a report.
+   */
+  undo?: () => Promise<void>;
+} | null;
 
 /**
  * Which long-running draft operation is in flight. The sidebar's own list load is tracked
