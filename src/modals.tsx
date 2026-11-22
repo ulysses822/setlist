@@ -81,7 +81,10 @@ export function CreatePlaylistModal({
             placeholder=""
           />
         </label>
-        <p className="hint">Creates a new empty private playlist on your Spotify account.</p>
+        <p className="hint">
+          Creates an empty playlist here. It reaches Spotify, as a private playlist, the first
+          time you push it.
+        </p>
         <div className="modal-actions">
           <button className="btn" onClick={() => onCreate(name, desc)} disabled={!canCreate}>
             {creating ? "Creating…" : "Create"}
