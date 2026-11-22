@@ -59,8 +59,6 @@ export default function StaleView({
   const [sort, setSort] = useState<StaleSort>("stale");
   const [threshold, setThreshold] = useState<Threshold>("90");
   const player = useNowPlaying();
-  const playingId = player?.playing ? bareId(player.playing.uri) : null;
-  const playingLinkedId = player?.playing?.linkedFromUri ? bareId(player.playing.linkedFromUri) : null;
 
   // Re-key stats by bareId so they join the playlist tracks (stored as original uris).
   const statByBare = useMemo(() => {
@@ -277,9 +275,7 @@ export default function StaleView({
               {rows.map(({ track, playlists, lastPlayed, count }) => {
                 const local = isLocalTrack(track.id);
                 const unavailable = track.is_playable === false;
-                const isPlaying =
-                  playingId != null &&
-                  (bareId(track.id) === playingId || bareId(track.id) === playingLinkedId);
+                const isPlaying = player?.isPlaying(track.id) ?? false;
                 const id = bareId(track.id);
                 return (
                   <li

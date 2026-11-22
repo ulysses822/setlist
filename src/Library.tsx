@@ -801,15 +801,7 @@ export default function Library() {
   // song across playlists (not the playlist context it was started from). Spotify may
   // relink a track to a market-specific equivalent at playback time while the playlist
   // file stores the original uri — match against both so relinked songs still highlight.
-  const playingId = player?.playing ? bareId(player.playing.uri) : null;
-  const playingLinkedId = player?.playing?.linkedFromUri
-    ? bareId(player.playing.linkedFromUri)
-    : null;
-  const isPlayingTrack = (id: string): boolean => {
-    if (playingId == null) return false;
-    const b = bareId(id);
-    return b === playingId || b === playingLinkedId;
-  };
+  const isPlayingTrack = (id: string): boolean => player?.isPlaying(id) ?? false;
   const playingActive = player?.playing != null && !player.playing.paused;
 
   // What the add box needs to know about the playing song. Derived here rather than in the

@@ -10,6 +10,7 @@ import {
 } from "react";
 import { api, type DeviceInfo, type RemotePlayback } from "./api";
 import type { SpotifyPlayer, SpotifyWebPlaybackState } from "./spotify-sdk";
+import { bareId } from "./metricsCalc";
 
 // The `any`s below are all Spotify's Web Playback SDK. It's loaded from their CDN at runtime
 // rather than installed, ships no type definitions, and isn't in package.json — so `window.Spotify`
@@ -79,6 +80,17 @@ export interface NowPlaying {
 export interface NowPlayingApi {
   /** Null when nothing is playing anywhere. */
   playing: NowPlaying | null;
+  /**
+   * Whether `trackId` is the song currently loaded.
+   *
+   * Lives here rather than in each view because it is not a plain comparison. Spotify may
+   * relink a track to a market-specific equivalent at playback time while playlist files
+   * still reference the original, so a match has to consider both uris — and matching is by
+   * bare id, so the highlight follows the song across playlists rather than tracking the
+   * context it was started from. Three views each rebuilt that from the raw uris, which meant
+   * three chances to leave out the relinked half and silently stop highlighting in one view.
+   */
+  isPlaying: (trackId: string) => boolean;
   play: PlayerApi["play"];
 }
 
@@ -515,10 +527,19 @@ export function PlayerProvider({ children }: { children: ReactNode }) {
       state?.paused,
     ]
   );
-  const nowPlayingValue = useMemo<NowPlayingApi>(
-    () => ({ playing: nowPlaying, play }),
-    [nowPlaying, play]
-  );
+  const nowPlayingValue = useMemo<NowPlayingApi>(() => {
+    const current = nowPlaying ? bareId(nowPlaying.uri) : null;
+    const linked = nowPlaying?.linkedFromUri ? bareId(nowPlaying.linkedFromUri) : null;
+    return {
+      playing: nowPlaying,
+      isPlaying: (trackId) => {
+        if (current == null) return false;
+        const id = bareId(trackId);
+        return id === current || id === linked;
+      },
+      play,
+    };
+  }, [nowPlaying, play]);
 
   return (
     <Ctx.Provider value={value}>
