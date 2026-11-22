@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { TrackEntry } from "./api";
-import { popSnapshot, recordSnapshot, UNDO_LIMIT, type Snapshot } from "./undo";
+import type { Content } from "./draftState";
+import { popSnapshot, recordSnapshot, UNDO_LIMIT } from "./undo";
 
 // Undo is the counterweight to editing in bulk, so the properties worth pinning are the ones
 // that decide whether one press undoes one thing.
@@ -18,21 +19,22 @@ function t(id: string): TrackEntry {
   };
 }
 
-function snap(key: string, tracks: TrackEntry[] = [t("a")]): Snapshot {
-  return { key, name: "Playlist", description: "", tracks };
+/** A step distinguished by its name, which `sameContent` compares like any other field. */
+function snap(label: string, tracks: TrackEntry[] = [t("a")]): Content {
+  return { name: label, description: "", tracks };
 }
 
 describe("recordSnapshot", () => {
   it("records a step", () => {
     const stack = recordSnapshot([], snap("one"));
     expect(stack).toHaveLength(1);
-    expect(stack[0].key).toBe("one");
+    expect(stack[0].name).toBe("one");
   });
 
   it("keeps steps in the order they happened", () => {
     let stack = recordSnapshot([], snap("one"));
     stack = recordSnapshot(stack, snap("two"));
-    expect(stack.map((s) => s.key)).toEqual(["one", "two"]);
+    expect(stack.map((s) => s.name)).toEqual(["one", "two"]);
   });
 
   it("drops an edit that changed nothing, so one press is not needed twice", () => {
@@ -49,16 +51,16 @@ describe("recordSnapshot", () => {
     let stack = recordSnapshot([], snap("a+b"));
     stack = recordSnapshot(stack, snap("a"));
     stack = recordSnapshot(stack, snap("a+b"));
-    expect(stack.map((s) => s.key)).toEqual(["a+b", "a", "a+b"]);
+    expect(stack.map((s) => s.name)).toEqual(["a+b", "a", "a+b"]);
   });
 
   it("keeps the most recent steps once it is full", () => {
-    let stack: Snapshot[] = [];
+    let stack: Content[] = [];
     for (let i = 0; i < UNDO_LIMIT + 10; i++) stack = recordSnapshot(stack, snap(`k${i}`));
     expect(stack).toHaveLength(UNDO_LIMIT);
     // The oldest ten went, not the newest.
-    expect(stack[0].key).toBe("k10");
-    expect(stack[stack.length - 1].key).toBe(`k${UNDO_LIMIT + 9}`);
+    expect(stack[0].name).toBe("k10");
+    expect(stack[stack.length - 1].name).toBe(`k${UNDO_LIMIT + 9}`);
   });
 
   it("does not mutate the stack it was given", () => {
@@ -84,15 +86,15 @@ describe("popSnapshot", () => {
   it("takes the most recent step and leaves the rest", () => {
     const stack = [snap("one"), snap("two"), snap("three")];
     const popped = popSnapshot(stack);
-    expect(popped?.snapshot.key).toBe("three");
-    expect(popped?.rest.map((s) => s.key)).toEqual(["one", "two"]);
+    expect(popped?.snapshot.name).toBe("three");
+    expect(popped?.rest.map((s) => s.name)).toEqual(["one", "two"]);
   });
 
   it("walks all the way back one step at a time", () => {
     let stack = [snap("one"), snap("two")];
     const seen: string[] = [];
     for (let popped = popSnapshot(stack); popped; popped = popSnapshot(stack)) {
-      seen.push(popped.snapshot.key);
+      seen.push(popped.snapshot.name);
       stack = popped.rest;
     }
     expect(seen).toEqual(["two", "one"]);
