@@ -28,6 +28,12 @@ one carries are the only thing separating them — and that is checked rather th
 build fails if the families stop being independently revocable, and the tests fail if a
 playlist scope ever appears in the list the webview's token is minted from.
 
+The main token asks for one scope per thing the backend actually calls and nothing else, which
+is the other half of that: a scope nothing uses is authority held for no reason. The list is
+pinned by a test, so adding one means naming the call that needs it. Note that scopes are
+granted at authorization, not at refresh — a login made before a scope was dropped keeps it
+until you disconnect and connect again.
+
 The client secret is the one credential that has to pass through the webview, because a
 keyboard is the only place it can come from. It transits rather than resides: it is held in a
 ref rather than React state, sent straight to the Rust process, and cleared from the input the
