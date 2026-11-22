@@ -21,6 +21,7 @@ import {
 } from "./api";
 import { bareId } from "./metricsCalc";
 import * as prefs from "./prefs";
+import { popSnapshot, recordSnapshot, type Snapshot } from "./undo";
 
 /**
  * A message for the host's status line. Lives here because this is where most of them are
@@ -118,6 +119,14 @@ export interface PlaylistDraft {
 
   edit: (tracks: TrackEntry[]) => void;
   setMeta: (patch: Partial<Pick<PlaylistFile, "name" | "description">>) => void;
+  /** Whether there is a step to go back to. False on a freshly opened playlist. */
+  canUndo: boolean;
+  /**
+   * Step the draft back to how it was before the last edit. In-memory only, like any other
+   * edit: it re-dirties the draft rather than touching the staged file, so Save is still what
+   * writes it and Push is still what sends it.
+   */
+  undo: () => void;
   /**
    * Adopt a track list that was staged behind the editor's back — the cross-playlist
    * duplicate normalizer writes the open playlist's staged file directly, and without this
@@ -150,6 +159,14 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
   const [busy, setBusy] = useState<DraftBusy>(null);
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [conflict, setConflict] = useState<SyncStatus | null>(null);
+  // Steps the editor can go back to, newest last.
+  //
+  // In a ref, not state, because `undo` has to read the *current* stack: Ctrl+Z auto-repeats
+  // when held, and two presses can land before a re-render, which with a state value would
+  // pop the same step twice from the same stale closure and swallow one press. The depth is
+  // mirrored in state purely so the button's enabled state re-renders.
+  const undoStack = useRef<Snapshot[]>([]);
+  const [undoDepth, setUndoDepth] = useState(0);
 
   // Content snapshot of the last persisted (staged-or-canonical) version of the open
   // playlist. "Dirty" means the draft differs from this — so edits that cancel out (add a
@@ -161,6 +178,20 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
   const markPersisted = (name: string, description: string, tracks: TrackEntry[]) => {
     persistedRef.current = contentKey(name, description, tracks);
   };
+  /**
+   * Forget the steps the editor could go back to. Called wherever the draft is *replaced*
+   * rather than edited — opening another playlist, pulling, reverting, pushing, or adopting a
+   * staged list written by another path. The old steps describe content that is no longer on
+   * screen, so stepping back into them would be a surprise rather than an undo.
+   *
+   * Deliberately not called from `save` or `flush`: those persist what is already on screen,
+   * and the steps that got there are still the steps the user took.
+   */
+  const dropUndoHistory = () => {
+    undoStack.current = [];
+    setUndoDepth(0);
+  };
+
   // Content snapshot of the canonical Spotify mirror (ignores staged edits). When the
   // draft returns to exactly this — e.g. a song was added, staged, then removed again —
   // the staged copy holds nothing real and is dropped so "modified" clears everywhere.
@@ -231,6 +262,7 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
             }
           : pf;
       setDraft(merged);
+      dropUndoHistory();
       markPersisted(merged.name, merged.description, merged.tracks);
       canonicalRef.current = contentKey(pf.name, pf.description, pf.tracks);
       let isStaged = cached != null;
@@ -286,6 +318,7 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
       if (ticket !== openTicket.current) return; // user opened another playlist meanwhile
       await followRename(file);
       setDraft(pf);
+      dropUndoHistory();
       markPersisted(pf.name, pf.description, pf.tracks);
       canonicalRef.current = persistedRef.current;
       setBaseline(pf.tracks);
@@ -318,8 +351,26 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
     setDirty(key !== persistedRef.current);
   }
 
+  /**
+   * Record where the draft is now, so the edit about to be applied can be stepped back out
+   * of. Called before the change rather than after, which is what makes the top of the stack
+   * "how things were".
+   */
+  function markUndoPoint(d: PlaylistFile) {
+    const next = recordSnapshot(undoStack.current, {
+      key: contentKey(d.name, d.description, d.tracks),
+      name: d.name,
+      description: d.description,
+      tracks: d.tracks,
+    });
+    if (next === undoStack.current) return; // an edit that changed nothing isn't a step
+    undoStack.current = next;
+    setUndoDepth(next.length);
+  }
+
   function edit(tracks: TrackEntry[]) {
     if (!draft) return;
+    markUndoPoint(draft);
     const next = { ...draft, tracks };
     setDraft(next);
     syncDirty(next);
@@ -328,9 +379,39 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
   // Edit the title/description in the draft (staged on Save, applied on Push).
   function setMeta(patch: Partial<Pick<PlaylistFile, "name" | "description">>) {
     if (!draft) return;
+    markUndoPoint(draft);
     const next = { ...draft, ...patch };
     setDraft(next);
     syncDirty(next);
+  }
+
+  /**
+   * Step back to before the last edit.
+   *
+   * Applies the snapshot the way an edit would, so everything downstream stays consistent
+   * without knowing undo exists: the dirty flag is recomputed (undoing back to exactly the
+   * Spotify mirror clears it and drops the staged file, same as editing back to it by hand),
+   * and the diff re-reads the draft.
+   */
+  function undo() {
+    const popped = popSnapshot(undoStack.current);
+    if (!popped || !draft) return;
+    const { snapshot, rest } = popped;
+    undoStack.current = rest;
+    setUndoDepth(rest.length);
+    // Only name, description and tracks come from the snapshot; the rest of the draft (its
+    // Spotify id, snapshot id, cover) describes the playlist rather than the edit and can't
+    // have changed, so taking it from this render is safe even mid-repeat.
+    const restored = {
+      ...draft,
+      name: snapshot.name,
+      description: snapshot.description,
+      tracks: snapshot.tracks,
+    };
+    // Applied through the updater so a playlist closed between this render and the keypress
+    // isn't brought back by its own undo.
+    setDraft((d) => (d ? restored : null));
+    syncDirty(restored);
   }
 
   function adoptStaged(tracks: TrackEntry[]) {
@@ -340,6 +421,7 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
       markPersisted(d.name, d.description, tracks);
       return { ...d, tracks };
     });
+    dropUndoHistory();
     setDirty(false);
     setStaged(true);
   }
@@ -382,6 +464,7 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
       const pf = await api.readPlaylist(selected); // reload canonical mirror
       if (ticket !== openTicket.current) return; // user opened another playlist meanwhile
       setDraft(pf);
+      dropUndoHistory();
       markPersisted(pf.name, pf.description, pf.tracks);
       canonicalRef.current = persistedRef.current;
       setBaseline(pf.tracks);
@@ -462,6 +545,7 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
       if (res.playlist) {
         await followRename(res.file);
         setDraft(res.playlist);
+        dropUndoHistory();
         markPersisted(res.playlist.name, res.playlist.description, res.playlist.tracks);
         canonicalRef.current = persistedRef.current;
         setBaseline(res.playlist.tracks);
@@ -500,6 +584,7 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
     closeDeleted: () => {
       setSelected(null);
       setDraft(null);
+      dropUndoHistory();
       setDirty(false);
       setStaged(false);
     },
@@ -514,6 +599,8 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
     flush,
     edit,
     setMeta,
+    canUndo: undoDepth > 0,
+    undo,
     adoptStaged,
   };
 }

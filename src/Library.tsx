@@ -209,6 +209,8 @@ export default function Library() {
     setShowDiff,
     edit,
     setMeta,
+    canUndo,
+    undo,
     save,
     push,
     revert,
@@ -276,6 +278,23 @@ export default function Library() {
     const t = setTimeout(() => setStatus(null), 4000);
     return () => clearTimeout(t);
   }, [status]);
+
+  // Ctrl+Z / Cmd+Z steps the draft back. Skipped while the cursor is in a text field, where
+  // the browser's own undo is what's wanted and is the only thing that can undo typing —
+  // the draft's snapshots are per-edit, so they'd throw away a half-typed name wholesale.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "z" || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      const el = e.target as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      if (!canUndo) return;
+      e.preventDefault();
+      undo();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canUndo, undo]);
 
   // Any change to the track list invalidates the selection, because it is held as indices:
   // a removal, a reorder or an add renumbers rows, and a stale index would point at whatever
@@ -1131,6 +1150,14 @@ export default function Library() {
                 </div>
               </div>
               <div className="actions">
+                <button
+                  className="btn ghost"
+                  onClick={undo}
+                  disabled={busyWriting || !canUndo}
+                  title="Undo the last edit (Ctrl+Z). Steps back one change at a time, unlike Revert."
+                >
+                  Undo
+                </button>
                 <button
                   className="btn ghost"
                   onClick={revert}
