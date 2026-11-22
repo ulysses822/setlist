@@ -2369,6 +2369,67 @@ body {
   font-size: 18px;
 }
 
+/* Scrolls inside the modal rather than growing it: a large library would otherwise push
+   Cancel past the bottom of the dialog. */
+.merge-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.merge-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.merge-item:hover:not(:disabled) {
+  background: var(--sunken);
+}
+
+.merge-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mi-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mi-tag {
+  flex: none;
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.mi-count {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .conflict-group {
   margin: 14px 0;
 }

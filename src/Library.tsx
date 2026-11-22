@@ -26,6 +26,7 @@ import {
   ConflictModal,
   CreatePlaylistModal,
   DeletePlaylistModal,
+  MergePlaylistModal,
 } from "./modals";
 import { useNowPlaying } from "./player";
 import { useGit } from "./git";
@@ -108,6 +109,8 @@ export default function Library() {
 
   const [menuOpen, setMenuOpen] = useState(false); // editor header ⋮ menu
   const [editMeta, setEditMeta] = useState(false); // editing title/description inline
+  const [mergeOpen, setMergeOpen] = useState(false); // playlist picker for a merge
+  const [merging, setMerging] = useState(false);
 
 
   // The library-wide panel currently taking over the editor pane, if any, and whether its
@@ -425,6 +428,46 @@ export default function Library() {
       setStatus({ kind: "err", msg: String(e) });
     } finally {
       setAddingPlaying(false);
+    }
+  }
+
+  /**
+   * Append another playlist's songs to the open one, skipping the ones already here.
+   *
+   * Reads the source's *effective* tracks — its staged edits if it has any, else the Spotify
+   * mirror — so merging in a playlist you were midway through editing takes the version you
+   * last saw rather than the one Spotify still has. The source itself is untouched: this is
+   * a copy in, not a move, so an unwanted playlist can be archived afterwards or kept.
+   */
+  async function mergePlaylist(source: LocalPlaylist) {
+    if (!draft || merging) return;
+    setMerging(true);
+    try {
+      const [pf, staged] = await Promise.all([
+        api.readPlaylist(source.file),
+        api.getStaged(source.file),
+      ]);
+      const { tracks, added, skipped } = appendMissing(draft.tracks, staged?.tracks ?? pf.tracks);
+      if (added.length === 0) {
+        setStatus({
+          kind: "ok",
+          msg: `Nothing to merge — every song in "${source.name}" is already here`,
+        });
+      } else {
+        edit(tracks);
+        loadFeatures(added);
+        setStatus({
+          kind: "ok",
+          msg: `Added ${added.length} song${added.length === 1 ? "" : "s"} from "${
+            source.name
+          }"${skipped > 0 ? `, skipped ${skipped} already here` : ""} — review the changes and push when you're happy with it`,
+        });
+      }
+      setMergeOpen(false);
+    } catch (e) {
+      setStatus({ kind: "err", msg: String(e) });
+    } finally {
+      setMerging(false);
     }
   }
 
@@ -1061,6 +1104,15 @@ export default function Library() {
                           className="kebab-item"
                           onClick={() => {
                             setMenuOpen(false);
+                            setMergeOpen(true);
+                          }}
+                        >
+                          Merge a playlist in…
+                        </button>
+                        <button
+                          className="kebab-item"
+                          onClick={() => {
+                            setMenuOpen(false);
                             void toggleArchive(selected!, currentArchived);
                           }}
                         >
@@ -1361,6 +1413,15 @@ export default function Library() {
           creating={creating}
           onCreate={(name, description) => void doCreate(name, description)}
           onClose={() => setCreateOpen(false)}
+        />
+      )}
+
+      {mergeOpen && draft && (
+        <MergePlaylistModal
+          playlists={playlists.filter((p) => p.file !== selected)}
+          busy={merging}
+          onMerge={(source) => void mergePlaylist(source)}
+          onClose={() => setMergeOpen(false)}
         />
       )}
 
