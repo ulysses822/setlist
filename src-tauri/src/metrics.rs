@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::track_id::bare_track_id;
+
 const RECCO: &str = "https://api.reccobeats.com/v1";
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -136,19 +138,6 @@ fn miss_updates<'a>(
             (k.as_str(), verdict)
         })
         .collect()
-}
-
-/// "spotify:track:ABC" -> "ABC"; also tolerates a bare id. Local files
-/// (spotify:local:…) have no track id — their last segment is the duration, which collides
-/// across songs — so the whole URI is their identity.
-fn bare_id(uri: &str) -> Option<String> {
-    if uri.starts_with("spotify:local:") {
-        return Some(uri.to_string());
-    }
-    uri.rsplit(':')
-        .next()
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
 }
 
 fn spotify_id_from_href(href: &str) -> Option<String> {
@@ -329,7 +318,7 @@ pub async fn features_for(
     let mut by_isrc: HashMap<String, String> = HashMap::new(); // isrc -> cache key
     let mut by_sid: HashMap<String, String> = HashMap::new(); // spotify id -> cache key
     for (id, isrc) in tracks {
-        let Some(key) = bare_id(id) else { continue };
+        let key = bare_track_id(id).to_string();
         if caches.features.contains_key(&key) || recently_missed(&caches.misses, &key, now) {
             continue;
         }
@@ -473,10 +462,9 @@ pub async fn features_for(
     // Collect cache hits for the requested tracks (keyed by bare Spotify id).
     let mut out = HashMap::new();
     for (id, _) in tracks {
-        if let Some(key) = bare_id(id) {
-            if let Some(f) = caches.features.get(&key) {
-                out.insert(key, f.clone());
-            }
+        let key = bare_track_id(id);
+        if let Some(f) = caches.features.get(key) {
+            out.insert(key.to_string(), f.clone());
         }
     }
     Ok(out)

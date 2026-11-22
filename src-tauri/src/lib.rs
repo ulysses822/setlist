@@ -3,6 +3,7 @@ mod git;
 mod history;
 mod metrics;
 mod spotify;
+mod track_id;
 
 use config::AppConfig;
 use spotify::{

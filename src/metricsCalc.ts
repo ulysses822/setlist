@@ -121,15 +121,24 @@ export type Outlier = {
 export type FeatureLookup = (track: TrackEntry) => Features | undefined;
 
 /**
- * "spotify:track:ABC" -> "ABC"; also tolerates a bare id. Matches bare_id in metrics.rs.
- * Local files (spotify:local:Artist:Album:Title:Duration) have no track id — their last
- * colon-segment is the duration, which collides across unrelated songs — so the whole URI
- * is their identity.
+ * The identity of a track: `"spotify:track:ABC"` -> `"ABC"`, and a bare id passed in comes
+ * back unchanged, so callers never have to normalize first.
+ *
+ * Two cases have no id to take, and both fall back to the uri itself. Local files
+ * (`spotify:local:Artist:Album:Title:Duration`) have no track id at all, and their last
+ * colon-segment is a duration shared by plenty of unrelated songs. And a uri whose id is
+ * empty is malformed; keeping the uri keeps it distinct, where returning `""` would make
+ * every malformed entry in the library read as the same track.
+ *
+ * The same rule in Rust is `bare_track_id` in `src-tauri/src/track_id.rs`, which pins the
+ * same cases — the two can't share a test, so they share the table.
  */
 export function bareId(uri: string): string {
   if (uri.startsWith("spotify:local:")) return uri;
   const i = uri.lastIndexOf(":");
-  return i === -1 ? uri : uri.slice(i + 1);
+  if (i === -1) return uri;
+  const id = uri.slice(i + 1);
+  return id === "" ? uri : id;
 }
 
 /**
