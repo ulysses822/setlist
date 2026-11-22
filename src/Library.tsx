@@ -10,13 +10,9 @@ import MetricsPanel from "./MetricsPanel";
 import { usePlaylistMetrics } from "./usePlaylistMetrics";
 import { usePlaylistDraft, type Status } from "./usePlaylistDraft";
 import { usePlaylistLibrary } from "./usePlaylistLibrary";
-import {
-  bareId,
-  FEATURE_META,
-  isLocalTrack,
-  type FeatureKey,
-} from "./metricsCalc";
+import { bareId, FEATURE_META, isLocalTrack } from "./metricsCalc";
 import { removeExactDuplicates, type CrossDupGroup } from "./lint";
+import { sortTracks, type SortDir, type SortKey } from "./trackList";
 import { usePlaylistDoctor } from "./usePlaylistDoctor";
 import IssuesStrip from "./IssuesStrip";
 import LibraryOverlay, {
@@ -38,8 +34,6 @@ import TrackRow, { TRACK_MIME, type RowStatus } from "./TrackRow";
 import { useRateLimit } from "./rateLimit";
 
 type SidebarMode = "playlists" | "songs";
-// View-only sort: the official order ("index"), title/duration, or any audio-feature column.
-type SortKey = "index" | "title" | "duration" | FeatureKey;
 
 // Column choices, mood goals and the outlier method all live in the data folder now — see
 // prefs.ts for why. These stay synchronous because they run during render; prefs holds both
@@ -93,7 +87,7 @@ export default function Library() {
   // Editor view state that belongs to this component rather than to the draft: how the
   // track list is sorted, and the message line every operation reports through.
   const [sortKey, setSortKey] = useState<SortKey>("index");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [status, setStatus] = useState<Status>(null);
 
 
@@ -531,34 +525,36 @@ export default function Library() {
   // Live cleanup issues for the open playlist (recomputed as you edit the draft).
 
   // Display order for the editable track list. Each entry keeps its real draft index `i`
-  // (used for editing and shown as the official "#"), so a title/duration sort is purely a
-  // view — the underlying playlist order never changes.
-  const orderedTracks = useMemo(() => {
-    const arr = (draft?.tracks ?? []).map((t, i) => ({ t, i }));
-    if (sortKey === "index") return arr;
-    const dir = sortDir === "asc" ? 1 : -1;
-    if (sortKey === "title") {
-      return [...arr].sort(
-        (a, b) => dir * a.t.title.localeCompare(b.t.title, undefined, { sensitivity: "base" })
-      );
-    }
-    if (sortKey === "duration") {
-      return [...arr].sort((a, b) => dir * ((a.t.duration_ms ?? 0) - (b.t.duration_ms ?? 0)));
-    }
-    // Audio-feature sort. Tracks not yet analyzed (no feature value) always sink to the
-    // bottom, regardless of direction, so the sorted block is the songs we actually know.
-    const valueOf = (t: TrackEntry): number | null => {
-      const f = featureOf(t);
-      return f ? f[sortKey] : null;
-    };
-    return [...arr].sort((a, b) => {
-      const av = valueOf(a.t);
-      const bv = valueOf(b.t);
-      if (av == null) return bv == null ? 0 : 1;
-      if (bv == null) return -1;
-      return dir * (av - bv);
+  // (used for editing and shown as the official "#"), so a sort is purely a view until
+  // `applySortOrder` writes it back.
+  const orderedTracks = useMemo(
+    () => sortTracks(draft?.tracks ?? [], sortKey, sortDir, featureOf),
+    [draft, sortKey, sortDir, featureMap]
+  );
+
+  // A feature sort is only as good as the numbers it has, and they arrive a playlist at a
+  // time: applying one mid-fetch would bake in an order where everything still pending sat
+  // at the bottom together. Title and duration come from the playlist file, so they're
+  // always ready.
+  const sortIsFeature = sortKey !== "index" && sortKey !== "title" && sortKey !== "duration";
+  const canApplySort = sortKey !== "index" && !(sortIsFeature && metricsLoading);
+
+  /**
+   * Make the sorted view the playlist's real order. It lands as an ordinary draft edit, so
+   * it shows up in the diff and reaches Spotify only on push — and dropping back to the
+   * official order afterwards means what's on screen is what was just written, rather than a
+   * sorted view of an already-sorted list.
+   */
+  function applySortOrder() {
+    if (!draft || !canApplySort) return;
+    const was = sortKey;
+    edit(orderedTracks.map(({ t }) => t));
+    toggleSort("index");
+    setStatus({
+      kind: "ok",
+      msg: `Reordered by ${was} — review the changes and push when you're happy with it`,
     });
-  }, [draft, sortKey, sortDir, featureMap]);
+  }
 
   function toggleSort(key: SortKey) {
     if (key === "index") {
@@ -1258,6 +1254,18 @@ export default function Library() {
             {sortKey !== "index" && !inDiff && (
               <p className="sort-note hint">
                 Sorted by {sortKey} — display only; the playlist's saved order is unchanged.
+                <button
+                  className="link"
+                  onClick={applySortOrder}
+                  disabled={!canApplySort}
+                  title={
+                    canApplySort
+                      ? "Reorder the playlist to match this view (staged — review and push)"
+                      : "Waiting for the remaining audio features"
+                  }
+                >
+                  Apply this order
+                </button>
                 <button className="link" onClick={() => toggleSort("index")}>
                   Restore official order
                 </button>

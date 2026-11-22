@@ -2321,6 +2321,11 @@ body {
   text-decoration: underline;
 }
 
+.link:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
