@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { Features, TrackEntry } from "./api";
-import { appendMissing, sortTracks } from "./trackList";
+import {
+  appendMissing,
+  removeAtIndices,
+  sortTracks,
+  toggleSelection,
+} from "./trackList";
 
 // A sort here can be applied to the playlist, so these are no longer only about what the
 // screen shows — getting one wrong reorders someone's real playlist on the next push. The
@@ -122,6 +127,105 @@ describe("sortTracks", () => {
     const tracks = [t("c"), t("a")];
     sortTracks(tracks, "title", "asc", none);
     expect(tracks.map((x) => x.title)).toEqual(["c", "a"]);
+  });
+});
+
+describe("toggleSelection", () => {
+  // The playlist's own order, which is what `displayed` looks like when nothing is sorted.
+  const plain = [0, 1, 2, 3, 4];
+
+  it("selects a single row, and deselects it again", () => {
+    const one = toggleSelection(new Set(), plain, 2, false, null);
+    expect([...one]).toEqual([2]);
+    expect([...toggleSelection(one, plain, 2, false, null)]).toEqual([]);
+  });
+
+  it("adds rows one at a time rather than replacing the selection", () => {
+    let sel = toggleSelection(new Set(), plain, 1, false, null);
+    sel = toggleSelection(sel, plain, 3, false, null);
+    expect([...sel].sort((a, b) => a - b)).toEqual([1, 3]);
+  });
+
+  it("shift-clicking takes the whole run back to the anchor", () => {
+    const sel = toggleSelection(new Set([1]), plain, 4, true, 1);
+    expect([...sel].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("shift-clicks the same run backwards", () => {
+    const sel = toggleSelection(new Set([4]), plain, 1, true, 4);
+    expect([...sel].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("clears a whole run when the shift-clicked row was already selected", () => {
+    // Not an invert-each-row: the clicked row's new state wins for the entire range, so a
+    // partly-selected run is cleared rather than inverted into a different partial mess.
+    const sel = toggleSelection(new Set([1, 2, 3, 4]), plain, 4, true, 1);
+    expect([...sel]).toEqual([]);
+
+    const partial = toggleSelection(new Set([1, 3, 4]), plain, 4, true, 1);
+    expect([...partial]).toEqual([]);
+  });
+
+  it("takes the rows on screen, not the rows next to each other in the file", () => {
+    // A playlist sorted by some feature: the rows shown are draft indices 4, 0, 2, 1, 3.
+    const sorted = [4, 0, 2, 1, 3];
+    const sel = toggleSelection(new Set(), sorted, 1, false, null);
+    expect([...sel]).toEqual([0]);
+
+    // Shift from screen position 1 to 3 picks up what the eye sees: 0, 2, 1.
+    const run = toggleSelection(sel, sorted, 3, true, 1);
+    expect([...run].sort((a, b) => a - b)).toEqual([0, 1, 2]);
+  });
+
+  it("treats a shift-click with no anchor as an ordinary one", () => {
+    expect([...toggleSelection(new Set(), plain, 3, true, null)]).toEqual([3]);
+  });
+
+  it("ignores an anchor left behind by a longer list", () => {
+    // Re-sorting or removing rows can strand the anchor past the end; a stale anchor must
+    // not reach for rows that are no longer there.
+    expect([...toggleSelection(new Set(), [0, 1], 1, true, 9)]).toEqual([1]);
+  });
+
+  it("ignores a click past the end of the list", () => {
+    expect([...toggleSelection(new Set([1]), plain, 99, false, null)]).toEqual([1]);
+  });
+
+  it("does not mutate the set it was given", () => {
+    const before = new Set([1]);
+    toggleSelection(before, plain, 2, false, null);
+    expect([...before]).toEqual([1]);
+  });
+});
+
+describe("removeAtIndices", () => {
+  it("removes every selected row in one pass", () => {
+    const tracks = [t("a"), t("b"), t("c"), t("d")];
+    // Done one at a time this would renumber after the first removal and take "d" instead.
+    const left = removeAtIndices(tracks, new Set([1, 2]));
+    expect(left.map((x) => x.title)).toEqual(["a", "d"]);
+  });
+
+  it("removes one copy of a duplicated track and keeps the other", () => {
+    const tracks = [t("a"), t("dup"), t("b"), t("dup")];
+    const left = removeAtIndices(tracks, new Set([3]));
+    expect(left.map((x) => x.title)).toEqual(["a", "dup", "b"]);
+  });
+
+  it("leaves the list alone when nothing is selected", () => {
+    const tracks = [t("a"), t("b")];
+    expect(removeAtIndices(tracks, new Set())).toEqual(tracks);
+  });
+
+  it("ignores an index that isn't in the list", () => {
+    const tracks = [t("a"), t("b")];
+    expect(removeAtIndices(tracks, new Set([7])).map((x) => x.title)).toEqual(["a", "b"]);
+  });
+
+  it("does not mutate the list it was given", () => {
+    const tracks = [t("a"), t("b")];
+    removeAtIndices(tracks, new Set([0]));
+    expect(tracks).toHaveLength(2);
   });
 });
 

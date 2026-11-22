@@ -13,7 +13,14 @@ import { usePlaylistDraft, type Status } from "./usePlaylistDraft";
 import { usePlaylistLibrary } from "./usePlaylistLibrary";
 import { bareId, FEATURE_META, isLocalTrack } from "./metricsCalc";
 import { removeExactDuplicates, type CrossDupGroup } from "./lint";
-import { appendMissing, sortTracks, type SortDir, type SortKey } from "./trackList";
+import {
+  appendMissing,
+  removeAtIndices,
+  sortTracks,
+  toggleSelection,
+  type SortDir,
+  type SortKey,
+} from "./trackList";
 import { usePlaylistDoctor } from "./usePlaylistDoctor";
 import IssuesStrip from "./IssuesStrip";
 import LibraryOverlay, {
@@ -99,6 +106,11 @@ export default function Library() {
   const [addingPlaying, setAddingPlaying] = useState(false);
   // Id of the album or artist currently being expanded, so only that row says so.
   const [expanding, setExpanding] = useState<string | null>(null);
+
+  // Ticked rows, as draft indices (see `toggleSelection` for why not ids), and the screen
+  // position a shift-click measures its range from.
+  const [selection, setSelection] = useState<Set<number>>(new Set());
+  const [selectAnchor, setSelectAnchor] = useState<number | null>(null);
 
   const dragIndex = useRef<number | null>(null);
   const [overIndex, setOverIndex] = useState<number | null>(null);
@@ -267,6 +279,16 @@ export default function Library() {
     return () => clearTimeout(t);
   }, [status]);
 
+  // Any change to the track list invalidates the selection, because it is held as indices:
+  // a removal, a reorder or an add renumbers rows, and a stale index would point at whatever
+  // moved into its place. `edit` replaces the array on every change, so this fires on each
+  // one — including the bulk removal itself, which should clear the tick boxes anyway. A
+  // title or description edit keeps the same array and leaves the selection alone.
+  useEffect(() => {
+    setSelection(new Set());
+    setSelectAnchor(null);
+  }, [draft?.tracks]);
+
   // Open a styled confirmation modal; resolves true (confirm) or false (cancel/dismiss).
   function confirmDialog(message: string, confirmLabel = "OK"): Promise<boolean> {
     return new Promise((resolve) => setConfirmState({ message, confirmLabel, resolve }));
@@ -285,6 +307,43 @@ export default function Library() {
   function removeAt(i: number) {
     if (!draft) return;
     edit(draft.tracks.filter((_, idx) => idx !== i));
+  }
+
+  /**
+   * A row's checkbox was clicked. `row` is its position on screen, so a shift-click selects
+   * the run the eye sees rather than the run the file happens to hold.
+   */
+  function pickTrack(row: number, shift: boolean) {
+    const displayed = orderedTracks.map(({ i }) => i);
+    setSelection((cur) => toggleSelection(cur, displayed, row, shift, selectAnchor));
+    // The anchor follows the last plain click. Keeping it across a shift-click is what lets
+    // someone widen or narrow a range by shift-clicking again.
+    if (!shift) setSelectAnchor(row);
+  }
+
+  /** Tick every row currently on screen, or clear the lot if they're all ticked already. */
+  function toggleSelectAll() {
+    const displayed = orderedTracks.map(({ i }) => i);
+    const all = displayed.length > 0 && displayed.every((i) => selection.has(i));
+    setSelection(all ? new Set() : new Set(displayed));
+    setSelectAnchor(null);
+  }
+
+  /**
+   * Remove every ticked row at once. One edit, not one per row: each removal renumbers
+   * everything after it, so removing them one at a time would take the wrong tracks.
+   *
+   * Like every other edit it goes to the draft, so a bulk removal is reviewable in the diff
+   * and reaches Spotify only on push.
+   */
+  function removeSelected() {
+    if (!draft || selection.size === 0) return;
+    const n = selection.size;
+    edit(removeAtIndices(draft.tracks, selection));
+    setStatus({
+      kind: "ok",
+      msg: `Removed ${n} song${n === 1 ? "" : "s"} — review the changes and push when you're happy with it`,
+    });
   }
 
   // Open one of the library-wide panels: stage any pending edits (the panels read from disk,
@@ -671,7 +730,14 @@ export default function Library() {
     });
   }
 
+  // Whether the header checkbox reads as ticked: every row on screen is selected. Computed
+  // from the displayed rows rather than the draft so it still means something while sorted.
+  const allShownSelected =
+    orderedTracks.length > 0 && orderedTracks.every(({ i }) => selection.has(i));
+
   function toggleSort(key: SortKey) {
+    // The anchor is a screen position, and re-sorting puts a different row there.
+    setSelectAnchor(null);
     if (key === "index") {
       setSortKey("index");
       setSortDir("asc");
@@ -858,7 +924,14 @@ export default function Library() {
   // metrics, playback and drag state; `TrackRow` is handed plain values and holds none of it.
   function renderRow(
     t: TrackEntry,
-    opts: { key: string; status: RowStatus; position: number | null; draftIndex?: number }
+    opts: {
+      key: string;
+      status: RowStatus;
+      position: number | null;
+      draftIndex?: number;
+      /** Where the row sits on screen, which is what a shift-click range follows. */
+      row?: number;
+    }
   ) {
     const i = opts.draftIndex ?? -1;
     return (
@@ -898,6 +971,8 @@ export default function Library() {
         }}
         onPlay={playFrom}
         onRemove={removeAt}
+        isSelected={selection.has(i)}
+        onToggleSelect={(shift) => pickTrack(opts.row ?? 0, shift)}
       />
     );
   }
@@ -1412,6 +1487,18 @@ export default function Library() {
             )}
 
             <div className={`tracks-header ${metricsOpen ? "with-feats" : ""}`}>
+              {inDiff ? (
+                <span />
+              ) : (
+                <input
+                  type="checkbox"
+                  className="t-pick"
+                  checked={allShownSelected}
+                  aria-label={allShownSelected ? "Clear selection" : "Select every song shown"}
+                  title={allShownSelected ? "Clear selection" : "Select every song shown"}
+                  onChange={toggleSelectAll}
+                />
+              )}
               <span />
               <button
                 className={`th-sort ${sortKey === "index" ? "active" : ""}`}
@@ -1462,6 +1549,20 @@ export default function Library() {
               <span />
             </div>
 
+            {selection.size > 0 && !inDiff && (
+              <p className="sel-bar">
+                <span>
+                  <strong>{selection.size}</strong> selected
+                </span>
+                <button className="btn ghost small danger" onClick={removeSelected}>
+                  Remove {selection.size === 1 ? "it" : "them"}
+                </button>
+                <button className="link" onClick={() => setSelection(new Set())}>
+                  Clear
+                </button>
+              </p>
+            )}
+
             {sortKey !== "index" && !inDiff && (
               <p className="sort-note hint">
                 Sorted by {sortKey} — display only; the playlist's saved order is unchanged.
@@ -1488,8 +1589,14 @@ export default function Library() {
                 ? diff.rows.map((r) =>
                     renderRow(r.track, { key: r.key, status: r.status, position: r.position })
                   )
-                : orderedTracks.map(({ t, i }) =>
-                    renderRow(t, { key: `${t.id}-${i}`, status: "normal", position: i + 1, draftIndex: i })
+                : orderedTracks.map(({ t, i }, row) =>
+                    renderRow(t, {
+                      key: `${t.id}-${i}`,
+                      status: "normal",
+                      position: i + 1,
+                      draftIndex: i,
+                      row,
+                    })
                   )}
             </ol>
           </>

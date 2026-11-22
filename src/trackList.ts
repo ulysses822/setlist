@@ -63,6 +63,56 @@ export function sortTracks(
   });
 }
 
+/**
+ * The selection after a checkbox click.
+ *
+ * Selection is held as *draft indices*, not track ids: a playlist can legitimately hold the
+ * same recording twice, and removing the second copy while keeping the first has to be
+ * possible — which keying on id would make impossible.
+ *
+ * Ranges, though, follow the screen rather than the file. `displayed` is the draft indices in
+ * the order they are shown, and `position`/`anchor` index into that, so shift-selecting a run
+ * of a playlist sorted by energy takes the rows you can actually see.
+ *
+ * A shift-click applies the *clicked* row's new state to the whole run: shift-clicking an
+ * unticked box ticks the run, and shift-clicking a ticked one clears it, rather than
+ * inverting each row independently — which is the behaviour every file list has and the one
+ * that is easy to get subtly wrong.
+ */
+export function toggleSelection(
+  current: ReadonlySet<number>,
+  displayed: number[],
+  position: number,
+  shift: boolean,
+  anchor: number | null
+): Set<number> {
+  const next = new Set(current);
+  const clicked = displayed[position];
+  if (clicked === undefined) return next;
+
+  const turningOn = !current.has(clicked);
+  const ranged = shift && anchor != null && anchor < displayed.length;
+  const from = ranged ? Math.min(anchor, position) : position;
+  const to = ranged ? Math.max(anchor, position) : position;
+
+  for (let p = from; p <= to; p++) {
+    const index = displayed[p];
+    if (index === undefined) continue;
+    if (turningOn) next.add(index);
+    else next.delete(index);
+  }
+  return next;
+}
+
+/**
+ * Drop the entries at `indices`. Removing several at once rather than one at a time is the
+ * point: every removal renumbers everything after it, so a loop over the same index set would
+ * delete the wrong tracks after the first.
+ */
+export function removeAtIndices(tracks: TrackEntry[], indices: ReadonlySet<number>): TrackEntry[] {
+  return tracks.filter((_, i) => !indices.has(i));
+}
+
 /** What `appendMissing` added, and what it left out because the track was already there. */
 export interface AppendResult {
   /** The combined list — `into` with the new entries after it. */

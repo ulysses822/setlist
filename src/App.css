@@ -1030,7 +1030,7 @@ body {
 
 .track {
   display: grid;
-  grid-template-columns: 18px 26px 1fr 1fr 52px 24px 24px;
+  grid-template-columns: 20px 18px 26px 1fr 1fr 52px 24px 24px;
   align-items: center;
   gap: 10px;
   padding: 7px 6px;
@@ -1043,7 +1043,7 @@ body {
    column sizes to its content (fixed-width cells), so header and rows stay aligned
    regardless of how many columns are selected. */
 .track.with-feats {
-  grid-template-columns: 18px 26px 1fr 1fr max-content 52px 24px 24px;
+  grid-template-columns: 20px 18px 26px 1fr 1fr max-content 52px 24px 24px;
 }
 
 .track.has-outlier {
@@ -1068,7 +1068,7 @@ body {
 /* Track table header row — mirrors the .track grid so columns line up. */
 .tracks-header {
   display: grid;
-  grid-template-columns: 18px 26px 1fr 1fr 52px 24px 24px;
+  grid-template-columns: 20px 18px 26px 1fr 1fr 52px 24px 24px;
   align-items: end;
   gap: 10px;
   padding: 0 6px 6px;
@@ -1080,7 +1080,7 @@ body {
 }
 
 .tracks-header.with-feats {
-  grid-template-columns: 18px 26px 1fr 1fr max-content 52px 24px 24px;
+  grid-template-columns: 20px 18px 26px 1fr 1fr max-content 52px 24px 24px;
 }
 
 .tracks-header .th-right {
@@ -1128,6 +1128,34 @@ body {
 
 .sort-note .link {
   font-size: 12px;
+}
+
+/* Row selection. The checkbox sits in its own leading column so it lines up with the
+   header's select-all and doesn't displace the drag grip. */
+.t-pick {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.track.selected {
+  background: rgb(var(--accent-rgb) / 0.08);
+}
+
+/* Appears only with a selection, above the sort note, so the count and the action are
+   together and neither moves the list around when nothing is selected. */
+.sel-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 6px 10px;
+  background: rgb(var(--accent-rgb) / 0.08);
+  border: 1px solid rgb(var(--accent-rgb) / 0.3);
+  border-radius: 8px;
+  font-size: 13px;
 }
 
 .t-play {
