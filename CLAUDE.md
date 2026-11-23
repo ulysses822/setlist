@@ -20,10 +20,10 @@ The frontend half type-checks and builds anywhere. On macOS or Linux, `npm run b
 The `compile_error!` is unconditional, so there is no flag or feature that gets the Rust half
 building here. Plan around it rather than fighting it:
 
-- **Verifiable in-session:** `npm run build`, `npm run test:web` (43 tests), `npm run lint:web`,
+- **Verifiable in-session:** `npm run build`, `npm run test:web` (109 tests), `npm run lint:web`,
   and `node --check` on `scripts/get-refresh-token.mjs` / `templates/poll-plays.mjs`. That covers
   the whole frontend, the two standalone Node scripts, docs and workflows.
-- **Not verifiable in-session:** `cargo build`, `clippy`, `cargo fmt --check`, all 64 Rust tests,
+- **Not verifiable in-session:** `cargo build`, `clippy`, `cargo fmt --check`, all 74 Rust tests,
   and running the app (needs Windows, WebView2, the credential manager, and real Spotify
   credentials).
 
@@ -47,8 +47,29 @@ on Windows, and they bury a five-line security fix in a dozen unrelated ones. Ch
 metadata --locked` fails if the lockfile no longer satisfies every requirement, and `cargo fetch
 --locked` checks the new checksums against the registry.
 
-The same limit applies to UI work: "run the app and say what you clicked" is impossible on
-Linux, so say that instead of skipping the question.
+`cargo update -p <crate> --precise <version>` is worth trying first all the same. When the bump
+is confined it beats a hand edit — moving `plist` 1.9.0 to 1.10.4 touched five version lines,
+every one upward, and brought a new transitive dependency a hand edit would have had to add
+correctly by itself. Run it, read the whole diff for downgrades, and fall back to editing by
+hand if it drags anything backwards.
+
+UI work has a middle path, and it is worth taking before calling a layout change unverified.
+Chromium and Playwright are pre-installed, so the real stylesheet can be served against a copy
+of the component's markup and *measured*: widths and heights out of `getBoundingClientRect`,
+screenshots at each size that matters (`tauri.conf.json` sets the window default to 1100 and
+the floor to 880), and both themes by stamping `data-theme` on `<html>`. That is how 0.2.1's
+header fix was found, and more usefully how the first attempt at it was caught — pinning the
+button row stopped the squashing and moved the squeeze onto the description, which no
+type-check would have shown.
+
+Say what it actually was, though. A harness reproduces the stylesheet, not the live DOM, and
+WebView2 is not this Chromium. "Measured in a headless harness at these widths" is honest;
+"verified" is not, and a look at the real app on Windows is still owed before release.
+
+Tags and releases cannot be touched from here at all. Pushing a tag, deleting one, and
+deleting a release have each come back 403 or have no tool behind them; dispatching
+`release.yml` is the only route in, and it cuts its own tag. Don't retry the 403 — hand the
+steps to the user.
 
 ## Commands
 
