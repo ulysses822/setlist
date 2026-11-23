@@ -266,6 +266,9 @@ body {
   padding: 10px 20px;
   font-weight: 600;
   font-size: 14px;
+  /* A label wrapped inside a 999px radius stops reading as a pill and comes out as a
+     blob two or three lines tall. The button sizes to its label instead. */
+  white-space: nowrap;
   cursor: pointer;
   transition: filter 0.15s ease;
 }
@@ -761,9 +764,13 @@ body {
   color: var(--muted);
 }
 
+/* The title and the action row compete for one line, and at the default 1100px window
+   there is not always room for both. The info side gives up width first (its text wraps),
+   and below ~750px the actions drop to a line of their own rather than squeeze the title
+   into a one-word-per-line column. */
 .editor-head {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
   align-items: flex-start;
   gap: 16px;
   margin-bottom: 14px;
@@ -773,6 +780,9 @@ body {
   display: flex;
   gap: 14px;
   align-items: flex-start;
+  /* 280px is the cover plus enough title to read — the width below which wrapping the
+     row beats shrinking it. min-width lets the text ellipsise if even that is too much. */
+  flex: 1 1 280px;
   min-width: 0;
 }
 
@@ -869,6 +879,10 @@ body {
   display: flex;
   gap: 8px;
   align-items: center;
+  /* Never shrink: five fixed-width buttons, and there is nothing here to reflow. */
+  flex: 0 0 auto;
+  /* Holds the row right on its own wrapped line too, which space-between would not. */
+  margin-left: auto;
 }
 
 /* ⋮ menu for niche playlist actions (pin / archive / delete). */
@@ -937,10 +951,6 @@ body {
 .add-row .filter {
   flex: 1;
   min-width: 0;
-}
-
-.add-row .btn {
-  white-space: nowrap;
 }
 
 .results {
