@@ -1,7 +1,7 @@
 {
   "name": "setlist",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Git principles for your Spotify playlists - a desktop playlist editor, cleanup doctor and player backed by version-controlled files you own.",
   "license": "GPL-3.0-only",
   "author": "ulysses822",
