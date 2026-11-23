@@ -1,65 +1,163 @@
 name: Release
 
-# Builds the Windows installers on a v* tag and drafts a release with them attached, so the
-# published binary and the source it came from are the same commit. Assets live on the
-# Releases page; none of them are committed here.
+# Builds the Windows installers and publishes a release with them attached.
 #
-# workflow_dispatch runs the same build without publishing. It is also the only CI job that
-# compiles the app.
+# **Run by hand, from the Actions tab.** A push is not a release: pushes are gated by
+# `ci.yml` and accumulate, and a release gathers up however many of them have landed since
+# the last one. So the version in the manifests is what the working tree *would* publish,
+# not what is published — bump it as behaviour changes, and release when there is something
+# worth releasing.
+#
+# The tag is derived from the manifests rather than supplied by hand, and `gh release create`
+# cuts it at the commit that was actually built. Requiring a human to create a matching tag
+# made the version agreement a step that could be got wrong, and it was: a tag whose
+# filename disagreed with the manifests would ship an installer lying about its version, so
+# the old workflow checked for that and refused — turning a mistake into a failed release
+# rather than preventing it. Reading the number instead of being told it removes the class.
+#
+# This also runs the gates again before it builds. `ci.yml` runs them on every push to main,
+# but a release can be dispatched from any ref, and the one thing that must never ship is a
+# binary whose tests were never run on that exact commit.
 on:
-  push:
-    tags: ["v*"]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish immediately instead of leaving a draft to read first
+        type: boolean
+        default: false
 
+# Only the publishing step needs more, and it asks for it on the job.
 permissions:
-  contents: write # create the release and upload assets
+  contents: read
 
 defaults:
   run:
     shell: bash # available on Windows runners, same as the other workflows
 
 jobs:
-  windows:
+  release:
     runs-on: windows-latest
+    permissions:
+      contents: write # create the release, cut its tag, upload the assets
     steps:
+      # Pinned to a full commit SHA, not a mutable tag, for the same reason as the other
+      # workflows: a hijacked tag must not be able to inject code into CI.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      # A tag that disagrees with the manifests would ship an installer whose filename lies
-      # about its version.
-      - name: Check the tag matches the manifests
-        if: startsWith(github.ref, 'refs/tags/')
+      # Done before anything is built, so a version problem costs seconds rather than a
+      # five-minute Windows compile. `ci.yml` has a job that keeps these five in step on
+      # every push; this repeats it because a release can be dispatched from a ref that job
+      # never ran on, and because the number it reads is the one it is about to tag.
+      - name: Read the version, and refuse to release it twice
+        id: version
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          pkg=$(node -p "require('./package.json').version")
-          crate=$(sed -n '0,/^version = /s/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml)
-          for got in "$conf:tauri.conf.json" "$pkg:package.json" "$crate:Cargo.toml"; do
-            if [ "${got%%:*}" != "$tag" ]; then
-              echo "::error::${got##*:} says ${got%%:*}, tag says $tag"
-              exit 1
+          want=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          failed=0
+          check() {
+            if [ "$2" != "$want" ]; then
+              echo "::error::$1 says $2, tauri.conf.json says $want"
+              failed=1
             fi
-          done
+          }
+          check package.json "$(node -p "require('./package.json').version")"
+          check "package-lock.json (root)" "$(node -p "require('./package-lock.json').version")"
+          check "package-lock.json (packages[\"\"])" \
+                "$(node -p "require('./package-lock.json').packages[''].version")"
+          check src-tauri/Cargo.toml \
+                "$(sed -n '0,/^version = /s/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml)"
+          check src-tauri/Cargo.lock \
+                "$(awk '/^name = "setlist"$/ { getline; gsub(/^version = "|"$/, ""); print; exit }' src-tauri/Cargo.lock)"
+          [ "$failed" = 0 ] || exit 1
 
-      # Rust and Node are preinstalled on the runner, so no setup-* actions: the third-party
-      # surface here stays at the one pinned checkout.
-      #
-      # --ignore-scripts matches audit.yml. esbuild's binary arrives through its platform
-      # optionalDependency rather than its postinstall, so the frontend still builds.
+          tag="v$want"
+          # A release is cut from the manifests, so releasing the same number twice would
+          # mean two different trees under one version. Bump it and dispatch again.
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo "::error::$tag already exists. Bump the version in the manifests to release again."
+            exit 1
+          fi
+          echo "Releasing $want as $tag."
+          echo "version=$want" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      # Same cache as ci.yml's rust job, keyed the same way: a release should not pay for a
+      # cold Tauri dependency tree when a push on the same lockfile already warmed one.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      # --ignore-scripts matches audit.yml and ci.yml. esbuild's binary arrives through its
+      # platform optionalDependency rather than its postinstall, so the frontend still builds.
       - run: npm ci --ignore-scripts
 
-      # Runs tsc + vite build first (tauri.conf.json's beforeBuildCommand), then cargo.
+      # The gates, as ci.yml runs them. `npm run build` is deliberately absent: the bundle
+      # step below runs `tsc && vite build` itself through tauri.conf.json's
+      # beforeBuildCommand, so a type error fails the build either way.
+      - run: npm run lint:web
+
+      - run: npm run test:web
+
+      - name: Syntax-check the standalone scripts
+        run: |
+          node --check scripts/get-refresh-token.mjs
+          node --check templates/poll-plays.mjs
+
+      - name: Formatting
+        run: cargo fmt --check
+        working-directory: src-tauri
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: src-tauri
+
+      - name: Tests
+        run: cargo test
+        working-directory: src-tauri
+
+      # Runs tsc + vite build first (tauri.conf.json's beforeBuildCommand), then cargo, then
+      # the NSIS and WiX bundlers. The only job that compiles the app in release mode.
       - run: npm run tauri build
 
-      # Drafted so the notes can be read before the release is visible. Drop --draft to
-      # publish straight from the tag.
+      # Drafted by default so the notes can be read, and edited, before the release is
+      # visible; `publish: true` on the dispatch skips that.
       - name: Publish the installers
-        if: startsWith(github.ref, 'refs/tags/')
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --draft \
-            --title "Setlist $GITHUB_REF_NAME" \
-            --notes "Windows only, and unsigned -- SmartScreen will ask you to confirm. You also need git on your PATH and your own Spotify Client ID; see the README." \
-            src-tauri/target/release/bundle/nsis/*-setup.exe \
-            src-tauri/target/release/bundle/msi/*.msi
+          setup=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe)
+          msi=$(ls src-tauri/target/release/bundle/msi/*.msi)
+
+          # The installers are unsigned, so SmartScreen's warning is the only thing standing
+          # between a download and a double-click, and "Run anyway" is advice to ignore it.
+          # Publishing the digests gives anyone who wants to check what they actually got a
+          # way to do it, which is the one assurance an unsigned build can offer.
+          cat > release-notes.md <<EOF
+          Windows only. The installer is unsigned, so SmartScreen will stop you with
+          "Windows protected your PC" — choose **More info**, then **Run anyway**.
+
+          You also need \`git\` on your PATH and your own Spotify Client ID. The
+          [README](https://github.com/${{ github.repository }}#download) walks through both.
+
+          | File | SHA-256 |
+          |---|---|
+          | \`$(basename "$setup")\` | \`$(sha256sum "$setup" | cut -d ' ' -f 1)\` |
+          | \`$(basename "$msi")\` | \`$(sha256sum "$msi" | cut -d ' ' -f 1)\` |
+          EOF
+
+          draft=--draft
+          if [ "$PUBLISH" = "true" ]; then
+            draft=
+          fi
+
+          gh release create "$TAG" "$setup" "$msi" \
+            $draft \
+            --target "$GITHUB_SHA" \
+            --title "Setlist $TAG" \
+            --notes-file release-notes.md

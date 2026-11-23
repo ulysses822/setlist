@@ -104,3 +104,39 @@ jobs:
       - name: Tests
         run: cargo test
         working-directory: src-tauri
+
+  versions:
+    # The version lives in five places, and until this job existed only three of them were
+    # ever compared — by release.yml, at the moment you wanted to ship. The other two were
+    # unguarded: `cargo metadata --locked` would have caught Cargo.lock but nothing in CI
+    # ran it, and `npm ci` does *not* catch package-lock.json, because it checks that the
+    # dependency tree agrees and says nothing about the root package's own version.
+    #
+    # A drift in any of them is cheap to find here and expensive later: release.yml refuses
+    # to build on one, so it turns into a failed release rather than a failed push.
+    name: the five version sites agree
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # tauri.conf.json is the reference because it is the one the built installer's
+      # filename comes from, so it is the number a user actually sees.
+      - run: |
+          want=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "tauri.conf.json says $want"
+          failed=0
+          check() {
+            if [ "$2" != "$want" ]; then
+              echo "::error::$1 says $2, tauri.conf.json says $want"
+              failed=1
+            fi
+          }
+          check package.json "$(node -p "require('./package.json').version")"
+          check "package-lock.json (root)" "$(node -p "require('./package-lock.json').version")"
+          check "package-lock.json (packages[\"\"])" \
+                "$(node -p "require('./package-lock.json').packages[''].version")"
+          check src-tauri/Cargo.toml \
+                "$(sed -n '0,/^version = /s/^version = "\(.*\)"/\1/p' src-tauri/Cargo.toml)"
+          check src-tauri/Cargo.lock \
+                "$(awk '/^name = "setlist"$/ { getline; gsub(/^version = "|"$/, ""); print; exit }' src-tauri/Cargo.lock)"
+          exit "$failed"
