@@ -3,6 +3,10 @@
    Colours used at partial opacity are kept as bare `R G B` triples so a rule can say
    rgb(var(--accent-rgb) / 0.12) without hardcoding the channel values again. */
 :root {
+  /* Without this the engine draws every native control (checkboxes above all) in its
+     light palette, so an unchecked box is a solid white square on a near-black row. */
+  color-scheme: dark;
+
   --bg: #0d1117;
   --sunken: #0d1117; /* recessed: inputs, filter fields, track rows, volume slider */
   --panel: #161b22;
@@ -54,6 +58,8 @@
 /* Light. The green survives as the brand, a shade deeper so it holds up against white, and
    the warn/err/info hues darken far enough to stay readable as text rather than glowing. */
 :root[data-theme="light"] {
+  color-scheme: light;
+
   --bg: #f6f8fa;
   --sunken: #eef1f5;
   --panel: #ffffff;
@@ -1141,13 +1147,45 @@ body {
 }
 
 /* Row selection. The checkbox sits in its own leading column so it lines up with the
-   header's select-all and doesn't displace the drag grip. */
+   header's select-all and doesn't displace the drag grip.
+
+   Drawn rather than left native: every other control here is custom, and a stock
+   checkbox reads as a borrowed widget sitting in the list. Unchecked is the ghost
+   button's outline, checked is the solid button's fill — the same two states. */
 .t-pick {
-  width: 14px;
-  height: 14px;
+  appearance: none;
+  position: relative;
+  width: 15px;
+  height: 15px;
   margin: 0;
-  accent-color: var(--accent);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
   cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.t-pick:hover:not(:checked) {
+  border-color: var(--scroll-thumb-hover);
+}
+
+.t-pick:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* The tick is two borders of an empty box, turned 45°. An SVG mask would need a
+   second colour declaration to follow the theme; this one inherits the token. */
+.t-pick:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 
 .track.selected {
