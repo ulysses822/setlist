@@ -47,10 +47,5 @@ jobs:
       # Reads src-tauri/Cargo.lock and checks it against the RustSec advisory DB. Fails on any
       # unignored vulnerability; unmaintained/unsound advisories (e.g. the Linux-only gtk-rs
       # stack Tauri still uses) are reported as warnings and don't fail the build.
-      #
-      # quick-xml's RUSTSEC-2026-0194/0195 (fixed in 0.41) are ignored because we can't reach
-      # them: it's pinned transitively by plist -> tauri-utils at ^0.39, so bumping needs a new
-      # Tauri release. It's a build-time config parser, not code shipped in the running app.
-      # Remove these --ignore flags once Tauri's plist dependency moves to quick-xml >= 0.41.
-      - run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
+      - run: cargo audit
         working-directory: src-tauri
