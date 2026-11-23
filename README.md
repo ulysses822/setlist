@@ -27,7 +27,15 @@ against Spotify.](docs/screenshots/library.png)
   choose safe, merge, or overwrite.
 - Edits that cancel out clean themselves up: add a song, remove it again, and the
   playlist is simply *unmodified* — no phantom "unsaved changes".
-- **Revert** to the last synced state, any time.
+- **Undo** (Ctrl+Z) steps back through your edits one at a time; **Revert** drops the lot
+  and reloads the last synced version. A bulk removal across several playlists is offered
+  back from the message that reports it.
+- Songs go in without typing their names: search adds a track, a **whole album** or an
+  **artist's top tracks**, the song currently **playing** goes in with one click, and
+  another playlist can be **merged in** — each skipping anything already there.
+- Sort the editor by title, duration or any audio feature, then **apply that order** to the
+  playlist. Like every other edit it is staged and diffed first, so you see what moved
+  before Spotify does.
 
 ### Keep the library clean
 - The **cleanup doctor** scans everything: exact duplicates, near-duplicates (the same
@@ -38,6 +46,9 @@ against Spotify.](docs/screenshots/library.png)
   or Spotify search.
 - **Archive** playlists out of sight without deleting them; optionally unfollow them on
   Spotify while keeping the file (and ownership) so nothing is ever lost.
+- Select songs with a checkbox (shift-click for a run) and remove them together. In the
+  **stale-track** view that reaches across the library: narrow to what you haven't played in
+  six months, take the lot, and every affected playlist is staged for review.
 - Pin favorites, filter, and search every song across every playlist.
 
 ### Understand your music

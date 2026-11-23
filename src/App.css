@@ -926,6 +926,23 @@ body {
   margin-bottom: 14px;
 }
 
+/* The search field keeps the whole width when nothing is playing, so the row collapses to
+   just the input rather than leaving a gap where the button would be. */
+.add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.add-row .filter {
+  flex: 1;
+  min-width: 0;
+}
+
+.add-row .btn {
+  white-space: nowrap;
+}
+
 .results {
   list-style: none;
   margin: 6px 0 0;
@@ -935,6 +952,22 @@ body {
   border-radius: 10px;
   max-height: 280px;
   overflow-y: auto;
+}
+
+/* Separates songs from albums from artists — all three come back from one search, and
+   "+ add" means one track in the first group and a dozen in the next. */
+.results-head {
+  padding: 8px 10px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.results-head:not(:first-child) {
+  border-top: 1px solid var(--border-soft);
+  margin-top: 4px;
 }
 
 .result {
@@ -950,6 +983,11 @@ body {
   padding: 8px 10px;
   border-radius: 8px;
   cursor: pointer;
+}
+
+.result:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .r-dur {
@@ -992,7 +1030,7 @@ body {
 
 .track {
   display: grid;
-  grid-template-columns: 18px 26px 1fr 1fr 52px 24px 24px;
+  grid-template-columns: 20px 18px 26px 1fr 1fr 52px 24px 24px;
   align-items: center;
   gap: 10px;
   padding: 7px 6px;
@@ -1005,7 +1043,7 @@ body {
    column sizes to its content (fixed-width cells), so header and rows stay aligned
    regardless of how many columns are selected. */
 .track.with-feats {
-  grid-template-columns: 18px 26px 1fr 1fr max-content 52px 24px 24px;
+  grid-template-columns: 20px 18px 26px 1fr 1fr max-content 52px 24px 24px;
 }
 
 .track.has-outlier {
@@ -1030,7 +1068,7 @@ body {
 /* Track table header row — mirrors the .track grid so columns line up. */
 .tracks-header {
   display: grid;
-  grid-template-columns: 18px 26px 1fr 1fr 52px 24px 24px;
+  grid-template-columns: 20px 18px 26px 1fr 1fr 52px 24px 24px;
   align-items: end;
   gap: 10px;
   padding: 0 6px 6px;
@@ -1042,7 +1080,7 @@ body {
 }
 
 .tracks-header.with-feats {
-  grid-template-columns: 18px 26px 1fr 1fr max-content 52px 24px 24px;
+  grid-template-columns: 20px 18px 26px 1fr 1fr max-content 52px 24px 24px;
 }
 
 .tracks-header .th-right {
@@ -1090,6 +1128,34 @@ body {
 
 .sort-note .link {
   font-size: 12px;
+}
+
+/* Row selection. The checkbox sits in its own leading column so it lines up with the
+   header's select-all and doesn't displace the drag grip. */
+.t-pick {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.track.selected {
+  background: rgb(var(--accent-rgb) / 0.08);
+}
+
+/* Appears only with a selection, above the sort note, so the count and the action are
+   together and neither moves the list around when nothing is selected. */
+.sel-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+  padding: 6px 10px;
+  background: rgb(var(--accent-rgb) / 0.08);
+  border: 1px solid rgb(var(--accent-rgb) / 0.3);
+  border-radius: 8px;
+  font-size: 13px;
 }
 
 .t-play {
@@ -1745,6 +1811,10 @@ body {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+.lib-row.selected {
+  background: rgb(var(--accent-rgb) / 0.08);
+}
+
 .lib-row.unavailable .t-title-text,
 .lib-row.unavailable .lib-artists,
 .lib-row.unavailable .lib-dur {
@@ -1818,7 +1888,7 @@ body {
 
 /* Stale-track view: same row, with "last played" + play-count columns before the chips. */
 .stale-row {
-  grid-template-columns: 24px minmax(140px, 1.3fr) 1fr 96px 44px 1.4fr;
+  grid-template-columns: 20px 24px minmax(140px, 1.3fr) 1fr 96px 44px 1.4fr;
 }
 
 .stale-when {
@@ -2321,6 +2391,11 @@ body {
   text-decoration: underline;
 }
 
+.link:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -2345,6 +2420,67 @@ body {
 .modal h3 {
   margin: 0 0 8px;
   font-size: 18px;
+}
+
+/* Scrolls inside the modal rather than growing it: a large library would otherwise push
+   Cancel past the bottom of the dialog. */
+.merge-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.merge-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  color: var(--text);
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.merge-item:hover:not(:disabled) {
+  background: var(--sunken);
+}
+
+.merge-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.mi-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mi-tag {
+  flex: none;
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+
+.mi-count {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .conflict-group {

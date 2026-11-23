@@ -60,6 +60,14 @@ describe("bareId", () => {
     expect(isLocalTrack(local)).toBe(true);
     expect(isLocalTrack("spotify:track:x")).toBe(false);
   });
+
+  it("keeps a uri with no id distinct rather than giving it a shared empty key", () => {
+    // Identity is a map key in half a dozen places. Two malformed entries both answering ""
+    // would read as the same track, and the cleanup doctor would offer to delete one of them.
+    expect(bareId("spotify:track:")).toBe("spotify:track:");
+    expect(bareId("spotify:track:")).not.toBe(bareId("spotify:episode:"));
+    expect(bareId("")).toBe("");
+  });
 });
 
 describe("computeAggregates", () => {

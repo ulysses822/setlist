@@ -1,17 +1,19 @@
 // The open playlist's edit lifecycle: load it, track whether it has drifted from what's on
 // disk and on Spotify, edit it in memory, then save (stage) or push it.
 //
-// This is the part of Library that was genuinely hard to follow — eight pieces of state and
-// two content snapshots that only mean anything together, threaded through a dozen async
+// This was the part of Library that was genuinely hard to follow: eight pieces of state and
+// two content snapshots that only meant anything together, threaded through a dozen async
 // operations that each had to remember to update all of them in the right order. Getting one
-// wrong doesn't crash anything; it just makes the "modified" dot lie, which is the worst kind
+// wrong didn't crash anything; it just made the "modified" dot lie, which is the worst kind
 // of bug in an app whose whole promise is that you can see what you're about to change.
 //
-// Gathering them here doesn't remove the coupling, but it does make it declared: the host's
-// contribution is the `DraftHost` below and nothing else, and the invariants live next to the
-// state they constrain.
+// Gathering them in one file made the coupling declared. Removing it meant noticing that none
+// of those pieces were independent: a playlist in the editor is three contents, and `dirty`,
+// `staged` and the diff's baseline are all comparisons between them. `draftState.ts` holds
+// that model and the comparisons; what is left here is the asynchronous part — reading,
+// writing, pushing, and the ordering those need.
 
-import { useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import {
   api,
   type PlaylistFile,
@@ -19,14 +21,40 @@ import {
   type SyncStatus,
   type TrackEntry,
 } from "./api";
+import {
+  afterEdit,
+  afterPersist,
+  draftFile,
+  isDirty,
+  matchesMirror,
+  sessionOf,
+  type Content,
+  type Session,
+} from "./draftState";
 import { bareId } from "./metricsCalc";
 import * as prefs from "./prefs";
+import { popSnapshot, recordSnapshot } from "./undo";
+
+/** Stable empty baseline for when nothing is open, so memos keyed on it don't rerun. */
+const NO_TRACKS: TrackEntry[] = [];
 
 /**
  * A message for the host's status line. Lives here because this is where most of them are
  * raised.
  */
-export type Status = { kind: "ok" | "warn" | "err"; msg: string } | null;
+export type Status = {
+  kind: "ok" | "warn" | "err";
+  msg: string;
+  /**
+   * Offered beside the message when what was just done can be taken back.
+   *
+   * Only for operations that wrote *outside* the open draft — the editor's own edits are
+   * undone with the Undo button, which doesn't need a message to hang off and shouldn't
+   * depend on one still being on screen. A message carrying this one isn't auto-dismissed,
+   * since it's an offer rather than a report.
+   */
+  undo?: () => Promise<void>;
+} | null;
 
 /**
  * Which long-running draft operation is in flight. The sidebar's own list load is tracked
@@ -118,6 +146,14 @@ export interface PlaylistDraft {
 
   edit: (tracks: TrackEntry[]) => void;
   setMeta: (patch: Partial<Pick<PlaylistFile, "name" | "description">>) => void;
+  /** Whether there is a step to go back to. False on a freshly opened playlist. */
+  canUndo: boolean;
+  /**
+   * Step the draft back to how it was before the last edit. In-memory only, like any other
+   * edit: it re-dirties the draft rather than touching the staged file, so Save is still what
+   * writes it and Push is still what sends it.
+   */
+  undo: () => void;
   /**
    * Adopt a track list that was staged behind the editor's back — the cross-playlist
    * duplicate normalizer writes the open playlist's staged file directly, and without this
@@ -141,30 +177,81 @@ function withAvailability(tracks: TrackEntry[], mirror: TrackEntry[]): TrackEntr
 export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
   const { blocked, confirm, onStatus, onPlaylistsChanged, onLibraryChanged } = host;
 
-  const [selected, setSelected] = useState<string | null>(null);
-  const [draft, setDraft] = useState<PlaylistFile | null>(null);
-  const [baseline, setBaseline] = useState<TrackEntry[]>([]); // canonical Spotify-mirror order
-  const [showDiff, setShowDiff] = useState(false); // inline "Show changes" review mode
-  const [dirty, setDirty] = useState(false); // in-memory edits not yet staged
-  const [staged, setStaged] = useState(false); // saved (cached) but not pushed
+  // The one playlist open in the editor, or null. Everything the UI asks of it — dirty,
+  // staged, the diff's baseline, the playlist shown — is derived from this (see draftState.ts)
+  // rather than tracked beside it.
+  const [session, setSession] = useState<Session | null>(null);
+  // Genuinely independent of the content: what long operation is running, what Spotify said,
+  // and whether the user asked to see the diff.
   const [busy, setBusy] = useState<DraftBusy>(null);
   const [sync, setSync] = useState<SyncStatus | null>(null);
   const [conflict, setConflict] = useState<SyncStatus | null>(null);
+  const [showDiff, setShowDiff] = useState(false);
 
-  // Content snapshot of the last persisted (staged-or-canonical) version of the open
-  // playlist. "Dirty" means the draft differs from this — so edits that cancel out (add a
-  // song then remove it, swap two songs then swap back) clear the flag again rather than
-  // sticking forever.
-  const persistedRef = useRef("");
-  const contentKey = (name: string, description: string, tracks: TrackEntry[]) =>
-    `${name}\u0000${description}\u0000${tracks.map((t) => t.id).join("\u0001")}`;
-  const markPersisted = (name: string, description: string, tracks: TrackEntry[]) => {
-    persistedRef.current = contentKey(name, description, tracks);
+  // Steps the editor can go back to, newest last.
+  //
+  // In a ref, not state, because `undo` has to read the *current* stack: Ctrl+Z auto-repeats
+  // when held, and two presses can land before a re-render, which with a state value would
+  // pop the same step twice from the same stale closure and swallow one press. The depth is
+  // mirrored in state purely so the button's enabled state re-renders.
+  const undoStack = useRef<Content[]>([]);
+  const [undoDepth, setUndoDepth] = useState(0);
+
+  /**
+   * Forget the steps the editor could go back to. Called wherever the draft is *replaced*
+   * rather than edited — opening another playlist, pulling, reverting, pushing, or adopting a
+   * staged list written by another path. The old steps describe content that is no longer on
+   * screen, so stepping back into them would be a surprise rather than an undo.
+   *
+   * Deliberately not called from `save` or `flush`: those persist what is already on screen,
+   * and the steps that got there are still the steps the user took.
+   */
+  const dropUndoHistory = () => {
+    undoStack.current = [];
+    setUndoDepth(0);
   };
-  // Content snapshot of the canonical Spotify mirror (ignores staged edits). When the
-  // draft returns to exactly this — e.g. a song was added, staged, then removed again —
-  // the staged copy holds nothing real and is dropped so "modified" clears everywhere.
-  const canonicalRef = useRef("");
+
+  /** Record where the draft is, so the edit about to replace it can be stepped back out of. */
+  function pushUndo(content: Content) {
+    const next = recordSnapshot(undoStack.current, content);
+    if (next === undoStack.current) return; // an edit that changed nothing isn't a step
+    undoStack.current = next;
+    setUndoDepth(next.length);
+  }
+
+  /**
+   * Put edited content on screen, carrying out whatever `afterEdit` decided — which is only
+   * ever deleting a staged file that the edit made redundant.
+   */
+  function withDraft(s: Session, draft: Content): Session {
+    const { session, dropStaged } = afterEdit(s, draft);
+    if (dropStaged) {
+      // Fire-and-forget: a leftover file that equals the mirror is harmless, and
+      // `openPlaylist` clears it too.
+      api
+        .clearStaged(s.file)
+        .then(() => onPlaylistsChanged()) // refresh the sidebar's modified dot
+        .catch(() => {});
+    }
+    return session;
+  }
+
+  /**
+   * Write what is on screen to disk: stage it, or clear the staged file when the edits
+   * cancelled out and the mirror already says the same thing.
+   *
+   * Returns the session that write produced; throws if it failed. Three callers used to carry
+   * their own copy of this (the auto-stage in `openPlaylist`, `flush` and `save`), each with
+   * its own stage-or-clear branch and its own pair of flags to set afterwards.
+   */
+  async function persist(s: Session): Promise<Session> {
+    if (matchesMirror(s)) {
+      await api.clearStaged(s.file);
+    } else {
+      await api.stagePlaylist(s.file, s.draft.name, s.draft.description, s.draft.tracks);
+    }
+    return afterPersist(s);
+  }
 
   // Monotonic ticket for async loads that replace the draft (open/pull/revert/push). A
   // slow response from a playlist the user has already navigated away from must not apply
@@ -172,12 +259,12 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
   const openTicket = useRef(0);
 
   // A playlist's file is named after the playlist, so pulling or pushing a rename moves it
-  // out from under the open editor. Re-point at where it landed, and re-read the goal and
-  // column stores — the backend moved this playlist's entries to the new key and prefs holds
-  // both in memory, so a later save from the stale copy would undo that.
+  // out from under the open editor. The caller rebuilds the session on the new file; this
+  // re-reads the goal and column stores, because the backend moved this playlist's entries to
+  // the new key and prefs holds both in memory — a later save from the stale copy would
+  // undo that.
   async function followRename(file: string) {
-    if (file === selected) return;
-    setSelected(file);
+    if (file === session?.file) return;
     await prefs.loadPrefs();
   }
 
@@ -186,14 +273,9 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
     // edits persist on disk and reload when reopened, so nothing is silently lost. This
     // must also run when re-clicking the playlist that's already open — otherwise the
     // reload below would silently discard unsaved edits.
-    if (dirty && draft && selected) {
+    if (session && isDirty(session)) {
       try {
-        // Edits that cancelled out don't warrant a staged file — clear instead of stage.
-        if (contentKey(draft.name, draft.description, draft.tracks) === canonicalRef.current) {
-          await api.clearStaged(selected);
-        } else {
-          await api.stagePlaylist(selected, draft.name, draft.description, draft.tracks);
-        }
+        await persist(session);
         onPlaylistsChanged(); // refresh modified dot
       } catch (e) {
         onStatus({ kind: "err", msg: String(e) });
@@ -210,52 +292,53 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
     // which reads as a jarring flicker. Only the per-playlist view choices reset.
     host.onOpening(file);
     try {
-      const pf = await api.readPlaylist(file); // canonical = Spotify mirror
-      const cached = await api.getStaged(file); // saved-but-unpushed edits, if any
+      const [mirror, cached] = await Promise.all([
+        api.readPlaylist(file), // canonical = Spotify mirror
+        api.getStaged(file), // saved-but-unpushed edits, if any
+      ]);
       if (ticket !== openTicket.current) return; // superseded by a newer load
+
       // Availability (is_playable) lives on the freshly-pulled mirror. Staged edits saved
       // before this field existed (or that just never carried it) would otherwise shadow it
       // and lose the greyed-out state — overlay it back by id.
-      const stagedTracks = cached ? withAvailability(cached.tracks, pf.tracks) : null;
-      const tracks = stagedTracks ?? pf.tracks;
-      setSelected(file);
-      setBaseline(pf.tracks); // diff against the Spotify mirror
+      const staged: Content | null = cached
+        ? {
+            name: cached.name ?? mirror.name,
+            description: cached.description ?? mirror.description,
+            tracks: withAvailability(cached.tracks, mirror.tracks),
+          }
+        : null;
+
+      const opened = sessionOf(file, mirror);
+      // A staged file identical to the mirror holds edits that cancelled out — open on the
+      // mirror and drop it, so the playlist doesn't read as modified.
+      const redundant = staged != null && matchesMirror({ ...opened, draft: staged });
+      setSession(
+        staged && !redundant
+          ? { ...opened, hasStaged: true, persisted: staged, draft: staged }
+          : opened
+      );
+      dropUndoHistory();
       setShowDiff(false);
-      const merged =
-        cached && stagedTracks
-          ? {
-              ...pf,
-              name: cached.name ?? pf.name,
-              description: cached.description ?? pf.description,
-              tracks: stagedTracks,
-            }
-          : pf;
-      setDraft(merged);
-      markPersisted(merged.name, merged.description, merged.tracks);
-      canonicalRef.current = contentKey(pf.name, pf.description, pf.tracks);
-      let isStaged = cached != null;
-      if (isStaged && persistedRef.current === canonicalRef.current) {
-        // Leftover staged file identical to the mirror (edits that cancelled out) —
-        // drop it so the playlist doesn't read as modified.
-        isStaged = false;
+      if (redundant) {
         api
           .clearStaged(file)
           .then(() => onLibraryChanged())
           .catch(() => {});
       }
-      setStaged(isStaged);
-      setDirty(false);
+
+      const shown = staged && !redundant ? staged.tracks : mirror.tracks;
       host.onOpened(focusTrackId);
-      host.onTracksLoaded(tracks); // background; only fetches tracks we don't already have
+      host.onTracksLoaded(shown); // background; only fetches tracks we don't already have
       // Check Spotify for drift in the background (don't block opening). Skip while
       // rate-limited (would fail and extend the cooldown) and for local-only playlists
       // (not on Spotify yet, nothing to compare).
-      if (!blocked && pf.spotify_id) {
+      if (!blocked && mirror.spotify_id) {
         api
           .syncStatus(file)
-          .then((s) => {
+          .then((st) => {
             // Don't apply a stale banner to whatever playlist is open by now.
-            if (ticket === openTicket.current) setSync(s.remote_changed ? s : null);
+            if (ticket === openTicket.current) setSync(st.remote_changed ? st : null);
           })
           .catch(() => {});
       }
@@ -268,9 +351,9 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
 
   // Pull Spotify's current version into the canonical mirror (discards local edits).
   async function pullRemote() {
-    if (!selected) return;
+    if (!session) return;
     if (
-      (dirty || staged) &&
+      (isDirty(session) || session.hasStaged) &&
       !(await confirm(
         "Pull Spotify's version? This discards your local edits.",
         "Pull & discard"
@@ -281,17 +364,13 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
     setBusy("open");
     onStatus(null);
     try {
-      await api.clearStaged(selected);
-      const { file, playlist: pf } = await api.refreshPlaylist(selected);
+      await api.clearStaged(session.file);
+      const { file, playlist: mirror } = await api.refreshPlaylist(session.file);
       if (ticket !== openTicket.current) return; // user opened another playlist meanwhile
       await followRename(file);
-      setDraft(pf);
-      markPersisted(pf.name, pf.description, pf.tracks);
-      canonicalRef.current = persistedRef.current;
-      setBaseline(pf.tracks);
-      host.onTracksLoaded(pf.tracks);
-      setDirty(false);
-      setStaged(false);
+      setSession(sessionOf(file, mirror));
+      dropUndoHistory();
+      host.onTracksLoaded(mirror.tracks);
       setSync(null);
       onStatus({ kind: "ok", msg: "Pulled Spotify's current version" });
       onLibraryChanged();
@@ -302,64 +381,60 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
     }
   }
 
-  // Recompute dirty after a draft change. If the content lands back on exactly the
-  // Spotify mirror, any staged copy only holds the now-cancelled edits — drop it so the
-  // modified indicators (unsaved tag, sidebar dot, Save/Push buttons) clear everywhere.
-  function syncDirty(next: PlaylistFile) {
-    const key = contentKey(next.name, next.description, next.tracks);
-    if (key !== persistedRef.current && key === canonicalRef.current && selected) {
-      persistedRef.current = key;
-      setStaged(false);
-      api
-        .clearStaged(selected)
-        .then(() => onPlaylistsChanged()) // refresh the sidebar's modified dot
-        .catch(() => {}); // a leftover equal-to-mirror staged file is harmless; openPlaylist() cleans it too
-    }
-    setDirty(key !== persistedRef.current);
-  }
-
   function edit(tracks: TrackEntry[]) {
-    if (!draft) return;
-    const next = { ...draft, tracks };
-    setDraft(next);
-    syncDirty(next);
+    if (!session) return;
+    pushUndo(session.draft);
+    setSession(withDraft(session, { ...session.draft, tracks }));
   }
 
   // Edit the title/description in the draft (staged on Save, applied on Push).
   function setMeta(patch: Partial<Pick<PlaylistFile, "name" | "description">>) {
-    if (!draft) return;
-    const next = { ...draft, ...patch };
-    setDraft(next);
-    syncDirty(next);
+    if (!session) return;
+    pushUndo(session.draft);
+    setSession(withDraft(session, { ...session.draft, ...patch }));
   }
 
+  /**
+   * Step back to before the last edit.
+   *
+   * The step comes from the ref so a held Ctrl+Z can't pop the same one twice; the rest of
+   * the session comes from this render, which is safe because nothing else about it — the
+   * mirror, what is on disk, which file — changes between two presses.
+   */
+  function undo() {
+    const popped = popSnapshot(undoStack.current);
+    if (!popped || !session) return;
+    undoStack.current = popped.rest;
+    setUndoDepth(popped.rest.length);
+    setSession(withDraft(session, popped.snapshot));
+  }
+
+  /**
+   * Adopt a track list that was staged behind the editor's back — the cross-playlist writes
+   * stage the open playlist's file directly, and without this the next Save would push the
+   * stale in-memory list back over it.
+   *
+   * Only the tracks come across, so this takes the draft's name and description to be what
+   * the staged file already holds. That is true because every path that writes behind the
+   * editor runs from a library panel, and opening one flushes the draft first — a rename
+   * typed but not saved is on disk by then.
+   */
   function adoptStaged(tracks: TrackEntry[]) {
-    setDraft((d) => {
-      if (!d) return d;
-      // Recording the snapshot here is idempotent, so it's safe in the updater.
-      markPersisted(d.name, d.description, tracks);
-      return { ...d, tracks };
+    dropUndoHistory();
+    setSession((s) => {
+      if (!s) return s;
+      const adopted = { ...s.draft, tracks };
+      return { ...s, hasStaged: true, persisted: adopted, draft: adopted };
     });
-    setDirty(false);
-    setStaged(true);
   }
 
   // Persist any in-memory edit (stage it, or clear the staged file if the edits cancelled
   // out) so the library-wide views read current data. Returns false if persisting failed —
   // the caller should abort whatever it was about to do.
   async function flush(): Promise<boolean> {
-    if (!(dirty && draft && selected)) return true;
+    if (!session || !isDirty(session)) return true;
     try {
-      // Edits that cancelled out don't warrant a staged file — clear instead of stage.
-      if (contentKey(draft.name, draft.description, draft.tracks) === canonicalRef.current) {
-        await api.clearStaged(selected);
-        setStaged(false);
-      } else {
-        await api.stagePlaylist(selected, draft.name, draft.description, draft.tracks);
-        setStaged(true);
-      }
-      markPersisted(draft.name, draft.description, draft.tracks);
-      setDirty(false);
+      setSession(await persist(session));
       return true;
     } catch (e) {
       onStatus({ kind: "err", msg: String(e) });
@@ -368,9 +443,9 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
   }
 
   async function revert() {
-    if (!selected) return;
+    if (!session) return;
     if (
-      (dirty || staged) &&
+      (isDirty(session) || session.hasStaged) &&
       !(await confirm("Discard your edits and reload the saved version?", "Discard"))
     )
       return;
@@ -378,16 +453,12 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
     setBusy("open");
     onStatus(null);
     try {
-      await api.clearStaged(selected); // drop cached edits (local, no Spotify call)
-      const pf = await api.readPlaylist(selected); // reload canonical mirror
+      await api.clearStaged(session.file); // drop cached edits (local, no Spotify call)
+      const mirror = await api.readPlaylist(session.file); // reload canonical mirror
       if (ticket !== openTicket.current) return; // user opened another playlist meanwhile
-      setDraft(pf);
-      markPersisted(pf.name, pf.description, pf.tracks);
-      canonicalRef.current = persistedRef.current;
-      setBaseline(pf.tracks);
-      host.onTracksLoaded(pf.tracks);
-      setDirty(false);
-      setStaged(false);
+      setSession(sessionOf(session.file, mirror));
+      dropUndoHistory();
+      host.onTracksLoaded(mirror.tracks);
       onStatus({ kind: "ok", msg: "Reverted — edits discarded" });
       onLibraryChanged();
     } catch (e) {
@@ -398,25 +469,20 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
   }
 
   async function save() {
-    if (!draft || !selected) return;
+    if (!session) return;
+    const cancelled = matchesMirror(session);
     setBusy("save");
     onStatus(null);
     try {
-      if (contentKey(draft.name, draft.description, draft.tracks) === canonicalRef.current) {
-        // Edits cancelled out — nothing differs from the Spotify mirror, so saving would
-        // only create a no-op staged file. Clear any existing one instead.
-        await api.clearStaged(selected);
-        markPersisted(draft.name, draft.description, draft.tracks);
-        setDirty(false);
-        setStaged(false);
-        onStatus({ kind: "ok", msg: "No changes — already matches the Spotify mirror" });
-      } else {
-        await api.stagePlaylist(selected, draft.name, draft.description, draft.tracks);
-        setStaged(true);
-        markPersisted(draft.name, draft.description, draft.tracks);
-        setDirty(false);
-        onStatus({ kind: "ok", msg: "Saved (cached locally; not yet pushed to Spotify)" });
-      }
+      setSession(await persist(session));
+      onStatus({
+        kind: "ok",
+        // `persist` cleared the staged file rather than writing one: the edits cancelled out,
+        // so there is nothing to save that Spotify doesn't already have.
+        msg: cancelled
+          ? "No changes — already matches the Spotify mirror"
+          : "Saved (cached locally; not yet pushed to Spotify)",
+      });
       onLibraryChanged();
     } catch (e) {
       onStatus({ kind: "err", msg: String(e) });
@@ -426,20 +492,21 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
   }
 
   async function push() {
-    if (!draft) return;
-    if (!(await confirm(`Push "${draft.name}" to Spotify?`, "Push"))) return;
+    if (!session) return;
+    if (!(await confirm(`Push "${session.draft.name}" to Spotify?`, "Push"))) return;
     void resolveConflict("safe");
   }
 
   async function resolveConflict(strategy: PushStrategy) {
-    if (!draft || !selected) return;
+    if (!session) return;
+    const { file, draft } = session;
     const ticket = ++openTicket.current;
     setBusy("push");
     onStatus(null);
     setConflict(null);
     try {
       const res = await api.pushPlaylist(
-        selected,
+        file,
         draft.name,
         draft.description,
         draft.tracks,
@@ -461,13 +528,10 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
       }
       if (res.playlist) {
         await followRename(res.file);
-        setDraft(res.playlist);
-        markPersisted(res.playlist.name, res.playlist.description, res.playlist.tracks);
-        canonicalRef.current = persistedRef.current;
-        setBaseline(res.playlist.tracks);
+        // Spotify now holds what was pushed, so the pushed version *is* the mirror.
+        setSession(sessionOf(res.file, res.playlist));
+        dropUndoHistory();
         setShowDiff(false);
-        setDirty(false);
-        setStaged(false);
         setSync(null);
         onStatus(
           res.warning
@@ -486,22 +550,27 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
     }
   }
 
+  // Memoized because it builds a new object: `Library` keys memos on `draft`, and a fresh
+  // identity every render would recompute all of them every render.
+  const draft = useMemo(() => (session ? draftFile(session) : null), [session]);
+
   return {
-    selected,
+    selected: session?.file ?? null,
     draft,
-    baseline,
-    dirty,
-    staged,
+    baseline: session?.mirror.tracks ?? NO_TRACKS,
+    // Compared on every render rather than tracked. Cheap in practice: when nothing has been
+    // edited, `persisted` and `draft` are the same object, which `sameContent` answers on the
+    // first line — and when something has, the comparison stops at the first difference.
+    dirty: session ? isDirty(session) : false,
+    staged: session?.hasStaged ?? false,
     busy,
     sync,
     conflict,
     dismissConflict: () => setConflict(null),
     dismissSync: () => setSync(null),
     closeDeleted: () => {
-      setSelected(null);
-      setDraft(null);
-      setDirty(false);
-      setStaged(false);
+      setSession(null);
+      dropUndoHistory();
     },
     showDiff,
     setShowDiff,
@@ -514,6 +583,8 @@ export function usePlaylistDraft(host: DraftHost): PlaylistDraft {
     flush,
     edit,
     setMeta,
+    canUndo: undoDepth > 0,
+    undo,
     adoptStaged,
   };
 }

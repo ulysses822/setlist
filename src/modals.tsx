@@ -81,12 +81,83 @@ export function CreatePlaylistModal({
             placeholder=""
           />
         </label>
-        <p className="hint">Creates a new empty private playlist on your Spotify account.</p>
+        <p className="hint">
+          Creates an empty playlist here. It reaches Spotify, as a private playlist, the first
+          time you push it.
+        </p>
         <div className="modal-actions">
           <button className="btn" onClick={() => onCreate(name, desc)} disabled={!canCreate}>
             {creating ? "Creating…" : "Create"}
           </button>
           <button className="btn ghost" onClick={onClose} disabled={creating}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Pick a playlist to merge into the open one. Read-only on what it lists: the merge appends
+ * to the *open* playlist's draft, and the playlist picked here is left exactly as it was.
+ */
+export function MergePlaylistModal({
+  playlists,
+  busy,
+  onMerge,
+  onClose,
+}: {
+  /** Candidates, with the open playlist already excluded by the caller. */
+  playlists: LocalPlaylist[];
+  busy: boolean;
+  onMerge: (source: LocalPlaylist) => void;
+  onClose: () => void;
+}) {
+  const [filter, setFilter] = useState("");
+  const q = filter.trim().toLowerCase();
+  const shown = q ? playlists.filter((p) => p.name.toLowerCase().includes(q)) : playlists;
+  return (
+    <div className="modal-overlay" onClick={() => !busy && onClose()}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <h3>Merge a playlist in</h3>
+        <p className="hint">
+          Its songs are appended here, skipping any already in this playlist. Nothing is
+          removed from the playlist you pick, and nothing reaches Spotify until you push.
+        </p>
+        <input
+          className="filter"
+          name="merge-filter"
+          aria-label="Filter playlists"
+          placeholder="Filter playlists…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          autoFocus
+          spellCheck={false}
+        />
+        {shown.length === 0 ? (
+          <p className="hint pad">
+            {playlists.length === 0
+              ? "There's no other playlist to merge in yet."
+              : "No playlist matches that."}
+          </p>
+        ) : (
+          <ul className="merge-list">
+            {shown.map((p) => (
+              <li key={p.file}>
+                <button className="merge-item" onClick={() => onMerge(p)} disabled={busy}>
+                  <span className="mi-name">{p.name}</span>
+                  {p.archived && <span className="mi-tag">archived</span>}
+                  <span className="mi-count">
+                    {p.track_count} song{p.track_count === 1 ? "" : "s"}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="modal-actions">
+          <button className="btn ghost" onClick={onClose} disabled={busy}>
             Cancel
           </button>
         </div>

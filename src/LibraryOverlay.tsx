@@ -69,6 +69,7 @@ export default function LibraryOverlay({
   onOpenPlaylist,
   onOpenTrack,
   onNormalize,
+  onPrune,
   onError,
 }: {
   overlay: Overlay;
@@ -80,6 +81,8 @@ export default function LibraryOverlay({
   onOpenPlaylist: (file: string) => void;
   onOpenTrack: (file: string, trackId: string) => void;
   onNormalize: (group: CrossDupGroup, keepId: string) => void;
+  /** Remove songs (bare track ids) from every playlist holding them — the stale view's prune. */
+  onPrune: (trackIds: string[]) => Promise<void>;
   /** Surface a failure in Library's status line — this component has no message area. */
   onError: (message: string) => void;
 }) {
@@ -166,6 +169,7 @@ export default function LibraryOverlay({
           busy={busy}
           onClose={onClose}
           onOpenTrack={onOpenTrack}
+          onPrune={onPrune}
         />
       );
     case "status": {

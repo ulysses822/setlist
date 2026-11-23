@@ -33,9 +33,12 @@ const LISTEN_ADDR: &str = "127.0.0.1:8888";
 const REDIRECT_PATH: &str = "/callback";
 const AUTH_URL: &str = "https://accounts.spotify.com/authorize";
 const TOKEN_URL: &str = "https://accounts.spotify.com/api/token";
-/// Scopes for the backend's own (main) token. Deliberately excludes `streaming`, which only
-/// the SDK token needs — see `STREAMING_SCOPES`.
-const SCOPES: &str = "user-read-private user-read-email playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public user-top-read user-read-recently-played user-read-playback-state user-modify-playback-state";
+/// Scopes for the backend's own (main) token: one per thing the backend actually calls, and
+/// nothing else. Deliberately excludes `streaming`, which only the SDK token needs — see
+/// `STREAMING_SCOPES` — and `user-read-recently-played`, which belongs to the history
+/// logger's own separately-minted token rather than to this one. A test below pins the list,
+/// so adding a scope means naming the call that needs it.
+const SCOPES: &str = "user-read-private user-read-email playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public user-read-playback-state user-modify-playback-state";
 /// Exactly what the Web Playback SDK requires, nothing more.
 const STREAMING_SCOPES: &str = "streaming user-read-email user-read-private";
 
@@ -599,6 +602,30 @@ mod tests {
     #[test]
     fn the_backend_token_does_not_carry_the_sdk_scope() {
         assert!(!SCOPES.split_whitespace().any(|s| s == "streaming"));
+    }
+
+    /// The main token asks for exactly what the backend calls, which is the other half of the
+    /// claim in SECURITY.md: the families are separated by scope, so a scope nothing uses is
+    /// authority held for no reason. A scope is cheap to add and invisible once added, so the
+    /// list is pinned here — failing this test means either naming the call that needs the new
+    /// scope, or not asking for it.
+    #[test]
+    fn the_backend_token_asks_for_nothing_it_does_not_call() {
+        let mut asked: Vec<&str> = SCOPES.split_whitespace().collect();
+        asked.sort_unstable();
+        assert_eq!(
+            asked,
+            [
+                "playlist-modify-private",     // push, create, follow/unfollow, delete
+                "playlist-modify-public",      // the same, for a public playlist
+                "playlist-read-collaborative", // pulling a playlist shared with the user
+                "playlist-read-private",       // pulling the user's own
+                "user-modify-playback-state",  // play, pause, seek, skip, transfer
+                "user-read-email",             // `/me`, and `market=from_token` on catalog reads
+                "user-read-playback-state",    // `/me/player` and `/me/player/devices`
+                "user-read-private",           // the same as user-read-email
+            ]
+        );
     }
 
     /// The two tests above pin what each family carries. This one pins which family the webview

@@ -30,17 +30,39 @@ pub(crate) const API: &str = "https://api.spotify.com/v1";
 /// only exists so a garbage id is rejected — and echoed back — at a sane size.
 const MAX_ID_LEN: usize = 64;
 
-/// `{API}/playlists/{id}`, but only once `id` is verifiably a Spotify id.
+/// Whether `id` is the shape Spotify issues: non-empty, short, and base-62.
 ///
-/// Playlist ids reach us from the JSON in the data folder — a git repo, which can be cloned
-/// from anywhere — and are then interpolated into a request path sent with a full-scope
-/// token. That makes them untrusted input in the one place a URL is most forgeable: the `url`
-/// crate resolves dot segments before sending, so an id of `../me/player/pause` turns a PUT
-/// on a playlist into a PUT on the player, and a `?` or `#` quietly rewrites whatever query
-/// the caller appended. Spotify ids are base-62, so anything else is not an id at all —
-/// reject it rather than percent-encode it, since an escaped slash only buys a puzzling 404.
+/// The one check standing between an id and a request path. Ids reach us from the JSON in the
+/// data folder — a git repo, which can be cloned from anywhere — and from the webview, and are
+/// then interpolated into a request path sent with a full-scope token. That makes them
+/// untrusted input in the one place a URL is most forgeable: the `url` crate resolves dot
+/// segments before sending, so an id of `../me/player/pause` turns a PUT on a playlist into a
+/// PUT on the player, and a `?` or `#` quietly rewrites whatever query the caller appended.
+/// Spotify ids are base-62, so anything else is not an id at all — reject it rather than
+/// percent-encode it, since an escaped slash only buys a puzzling 404.
+fn is_spotify_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= MAX_ID_LEN && id.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// `{API}/{kind}/{id}` for a read of a catalog resource — a track, an album, an artist.
+///
+/// `kind` is always a literal from this file, never input; `id` is checked for the reason
+/// `is_spotify_id` gives. The error doesn't name the data folder the way `playlist_url`'s
+/// does, because these ids come back from a search rather than from disk.
+pub(crate) fn catalog_url(kind: &str, id: &str) -> Result<String, String> {
+    if !is_spotify_id(id) {
+        return Err(format!(
+            "{:?} is not a Spotify id.",
+            id.chars().take(MAX_ID_LEN).collect::<String>()
+        ));
+    }
+    Ok(format!("{API}/{kind}/{id}"))
+}
+
+/// `{API}/playlists/{id}`, but only once `id` is verifiably a Spotify id — see
+/// `is_spotify_id` for what that is guarding against.
 pub(crate) fn playlist_url(id: &str) -> Result<String, String> {
-    if id.is_empty() || id.len() > MAX_ID_LEN || !id.bytes().all(|b| b.is_ascii_alphanumeric()) {
+    if !is_spotify_id(id) {
         return Err(format!(
             "{:?} is not a Spotify playlist id — check its spotify_id in your data folder.",
             id.chars().take(MAX_ID_LEN).collect::<String>()
@@ -392,6 +414,21 @@ pub(crate) fn err<E: std::fmt::Display>(e: E) -> String {
 // invalidated it server-side, so drop the cache and re-mint once from the refresh token.
 // That also covers a token that expires mid-flow (e.g. a bulk pull outliving the ~1h TTL).
 // ---------------------------------------------------------------------------
+
+// Ceiling on pages followed per paginated listing — insurance against a malformed
+// self-referencing `next` link looping forever. Far above any real library: 200 pages is
+// 20k tracks in one playlist, or 10k playlists.
+const MAX_PAGES: usize = 200;
+
+pub(crate) fn pagination_guard(pages: &mut usize) -> Result<(), String> {
+    *pages += 1;
+    if *pages > MAX_PAGES {
+        return Err(format!(
+            "Spotify pagination did not terminate after {MAX_PAGES} pages — aborting."
+        ));
+    }
+    Ok(())
+}
 
 /// GET a JSON resource. On a non-2xx response, include Spotify's response body in the error
 /// so failures like 403/404 are diagnosable.
@@ -796,39 +833,269 @@ pub async fn delete_playlist(
     Ok(())
 }
 
-pub async fn search_tracks(
+/// An album a search turned up, as something to expand rather than something to play.
+#[derive(Serialize)]
+pub struct AlbumResult {
+    /// Bare album id, for `album_tracks` — not a uri: an album is never added as one thing.
+    pub id: String,
+    pub name: String,
+    pub artists: Vec<String>,
+    pub total_tracks: usize,
+    /// Just the year out of the release date, which is what tells two pressings apart.
+    pub year: Option<String>,
+}
+
+/// An artist a search turned up, to expand into their top tracks.
+#[derive(Serialize)]
+pub struct ArtistResult {
+    /// Bare artist id, for `artist_top_tracks`.
+    pub id: String,
+    pub name: String,
+}
+
+/// What one search answers with: tracks to add individually, and albums and artists to
+/// expand into tracks.
+#[derive(Serialize)]
+pub struct CatalogSearch {
+    pub tracks: Vec<SearchResult>,
+    pub albums: Vec<AlbumResult>,
+    pub artists: Vec<ArtistResult>,
+}
+
+/// Search the catalog for tracks, albums and artists at once.
+///
+/// One request for all three: `limit` applies per type, so this costs exactly what searching
+/// for tracks alone used to. Adding an album a song at a time was the thing worth fixing, and
+/// paying three requests to fix it would have traded one chore for a rate-limit cooldown.
+pub async fn search_catalog(
     state: &AppState,
     client_id: String,
     query: String,
-) -> Result<Vec<SearchResult>, String> {
+) -> Result<CatalogSearch, String> {
     if query.trim().is_empty() {
-        return Ok(Vec::new());
+        return Ok(CatalogSearch {
+            tracks: Vec::new(),
+            albums: Vec::new(),
+            artists: Vec::new(),
+        });
     }
     // Spotify caps the search `limit` at 10 — asking for 20 answers 400.
     let url = format!(
-        "{API}/search?type=track&limit=10&q={}",
+        "{API}/search?type=track,album,artist&limit=10&q={}",
         urlencoding::encode(query.trim())
     );
 
     #[derive(Deserialize)]
-    struct SearchResp {
-        tracks: Paging<TrackObj>,
+    struct AlbumSearchObj {
+        id: String,
+        name: String,
+        #[serde(default)]
+        artists: Vec<ArtistObj>,
+        #[serde(default)]
+        total_tracks: usize,
+        #[serde(default)]
+        release_date: Option<String>,
     }
 
-    let resp: SearchResp = get_json(state, &client_id, &url).await?;
-    Ok(resp
-        .tracks
-        .items
-        .into_iter()
-        .map(|t| SearchResult {
-            id: t.uri,
-            title: t.name,
-            artists: t.artists.into_iter().map(|a| a.name).collect(),
-            isrc: t.external_ids.and_then(|e| e.isrc),
-            album: t.album.map(|a| a.name),
-            duration_ms: t.duration_ms,
-        })
-        .collect())
+    #[derive(Deserialize)]
+    struct ArtistSearchObj {
+        id: String,
+        name: String,
+    }
+
+    // Each key is absent unless its type was asked for, and Spotify has been known to answer
+    // a multi-type search with one of them missing — so a missing album list means "none",
+    // not a failed search for the tracks that did come back.
+    #[derive(Deserialize)]
+    struct CatalogResp {
+        #[serde(default)]
+        tracks: Option<Paging<TrackObj>>,
+        #[serde(default)]
+        albums: Option<Paging<AlbumSearchObj>>,
+        #[serde(default)]
+        artists: Option<Paging<ArtistSearchObj>>,
+    }
+
+    let resp: CatalogResp = get_json(state, &client_id, &url).await?;
+    Ok(CatalogSearch {
+        tracks: resp
+            .tracks
+            .map(|p| p.items)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| SearchResult {
+                id: t.uri,
+                title: t.name,
+                artists: t.artists.into_iter().map(|a| a.name).collect(),
+                isrc: t.external_ids.and_then(|e| e.isrc),
+                album: t.album.map(|a| a.name),
+                duration_ms: t.duration_ms,
+            })
+            .collect(),
+        albums: resp
+            .albums
+            .map(|p| p.items)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| AlbumResult {
+                id: a.id,
+                name: a.name,
+                artists: a.artists.into_iter().map(|x| x.name).collect(),
+                total_tracks: a.total_tracks,
+                year: a.release_date.and_then(|d| year_of(&d)),
+            })
+            .collect(),
+        artists: resp
+            .artists
+            .map(|p| p.items)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| ArtistResult {
+                id: a.id,
+                name: a.name,
+            })
+            .collect(),
+    })
+}
+
+/// The year out of a Spotify release date, which is `YYYY`, `YYYY-MM` or `YYYY-MM-DD`
+/// depending on how precisely the release is known. `None` for anything else, so a blank or
+/// malformed date shows no year rather than a misleading fragment of one.
+fn year_of(release_date: &str) -> Option<String> {
+    let year: String = release_date.chars().take(4).collect();
+    (year.len() == 4 && year.bytes().all(|b| b.is_ascii_digit())).then_some(year)
+}
+
+/// Read full track objects for `ids`, in the order given, as playlist entries.
+///
+/// 50 ids per request, which is this endpoint's cap. Every id is checked before it goes into
+/// the query string: an unchecked `&` or `#` there would rewrite the request's parameters
+/// just as surely as a `..` rewrites its path.
+async fn tracks_by_id(
+    state: &AppState,
+    client_id: &str,
+    ids: &[String],
+) -> Result<Vec<TrackEntry>, String> {
+    // Spotify answers an id it can't resolve with a null element rather than an error, so the
+    // list can be shorter than what was asked for.
+    #[derive(Deserialize)]
+    struct TracksResp {
+        #[serde(default = "Vec::new")]
+        tracks: Vec<Option<TrackObj>>,
+    }
+
+    let mut out = Vec::with_capacity(ids.len());
+    for chunk in ids.chunks(50) {
+        for id in chunk {
+            if !is_spotify_id(id) {
+                return Err(format!(
+                    "{:?} is not a Spotify id.",
+                    id.chars().take(MAX_ID_LEN).collect::<String>()
+                ));
+            }
+        }
+        let url = format!("{API}/tracks?market=from_token&ids={}", chunk.join(","));
+        let resp: TracksResp = get_json(state, client_id, &url).await?;
+        out.extend(resp.tracks.into_iter().flatten().map(entry_from));
+    }
+    Ok(out)
+}
+
+/// Every track on an album, in album order, as playlist entries.
+///
+/// Two requests rather than one: an album's own track listing returns Spotify's *simplified*
+/// track object, which carries no `external_ids`, so every ISRC would come back null — and
+/// the ISRC is what both duplicate checks key on. The listing supplies the ids and their
+/// order; a batch read of those ids supplies the tracks themselves.
+pub async fn album_tracks(
+    state: &AppState,
+    client_id: String,
+    album_id: String,
+) -> Result<Vec<TrackEntry>, String> {
+    #[derive(Deserialize)]
+    struct SimpleTrackObj {
+        #[serde(default)]
+        id: Option<String>,
+    }
+
+    let mut ids: Vec<String> = Vec::new();
+    let mut url = format!(
+        "{}/tracks?limit=50&market=from_token",
+        catalog_url("albums", &album_id)?
+    );
+    let mut pages = 0;
+    loop {
+        pagination_guard(&mut pages)?;
+        let page: Paging<SimpleTrackObj> = get_json(state, &client_id, &url).await?;
+        ids.extend(page.items.into_iter().filter_map(|t| t.id));
+        match page.next {
+            Some(next) => url = next,
+            None => break,
+        }
+    }
+    tracks_by_id(state, &client_id, &ids).await
+}
+
+/// An artist's top tracks in this market, as playlist entries.
+///
+/// One request: this endpoint returns full track objects, ISRCs included. "Top" is Spotify's
+/// own popularity ranking and about ten tracks long — a sampler, not a discography.
+pub async fn artist_top_tracks(
+    state: &AppState,
+    client_id: String,
+    artist_id: String,
+) -> Result<Vec<TrackEntry>, String> {
+    #[derive(Deserialize)]
+    struct TopResp {
+        #[serde(default = "Vec::new")]
+        tracks: Vec<TrackObj>,
+    }
+
+    let url = format!(
+        "{}/top-tracks?market=from_token",
+        catalog_url("artists", &artist_id)?
+    );
+    let resp: TopResp = get_json(state, &client_id, &url).await?;
+    Ok(resp.tracks.into_iter().map(entry_from).collect())
+}
+
+/// A Spotify track object as a playlist entry.
+///
+/// `added_at` / `added_by` stay unset: Spotify stamps those when the push actually adds the
+/// track, so filling them in here would date the addition to whenever Setlist happened to
+/// read the track.
+///
+/// When `market` relinked the track to a local equivalent, the id kept is `linked_from` —
+/// the one the catalog (and therefore every other playlist file) references. Storing the
+/// relinked uri instead would make the next pull read as though the track had been swapped.
+pub(crate) fn entry_from(t: TrackObj) -> TrackEntry {
+    TrackEntry {
+        id: t.linked_from.map(|l| l.uri).unwrap_or(t.uri),
+        isrc: t.external_ids.and_then(|e| e.isrc),
+        title: t.name,
+        artists: t.artists.into_iter().map(|a| a.name).collect(),
+        added_at: None,
+        added_by: None,
+        duration_ms: t.duration_ms,
+        is_playable: t.is_playable,
+    }
+}
+
+/// Read one track from the catalog as a playlist entry.
+///
+/// This exists so "add the song that's playing" produces the same entry a pull would. The
+/// webview's player state knows the title, artists and duration but not the ISRC, and the
+/// ISRC is what the duplicate checks key on — a track added without one is invisible to them
+/// until the next pull refills it.
+pub async fn track_entry(
+    state: &AppState,
+    client_id: String,
+    track_id: String,
+) -> Result<TrackEntry, String> {
+    // `market=from_token` so `is_playable` comes back, matching what a pull records.
+    let url = format!("{}?market=from_token", catalog_url("tracks", &track_id)?);
+    let track: TrackObj = get_json(state, &client_id, &url).await?;
+    Ok(entry_from(track))
 }
 
 // --- Drop-in replacement search for unavailable (greyed-out) tracks ---------------------
@@ -1064,6 +1331,107 @@ mod tests {
         // Well-formed but absurd is still rejected, so the message can safely quote it.
         assert!(playlist_url(&"a".repeat(MAX_ID_LEN + 1)).is_err());
         assert!(playlist_url(&"a".repeat(MAX_ID_LEN)).is_ok());
+    }
+
+    #[test]
+    fn catalog_url_checks_its_id_as_closely_as_a_playlist_id() {
+        assert_eq!(
+            catalog_url("tracks", "4cOdK2wGLETKBW3PvgPWqT").unwrap(),
+            "https://api.spotify.com/v1/tracks/4cOdK2wGLETKBW3PvgPWqT"
+        );
+        assert_eq!(
+            catalog_url("albums", "1234567890abcdefABCDEF").unwrap(),
+            "https://api.spotify.com/v1/albums/1234567890abcdefABCDEF"
+        );
+
+        // These ids come from the webview rather than the data folder, which makes them no
+        // more trustworthy — the same escapes have to be refused here.
+        for bad in [
+            "",
+            "../me/player/pause",
+            "abc/tracks",
+            "abc?market=x",
+            "abc#frag",
+            "abc%2f",
+            "spotify:track:abc",
+            "abc def",
+            &"a".repeat(MAX_ID_LEN + 1),
+        ] {
+            assert!(
+                catalog_url("tracks", bad).is_err(),
+                "should have rejected {bad:?}"
+            );
+        }
+    }
+
+    /// A local file has no catalog entry, and `bareId` on the frontend leaves its whole
+    /// `spotify:local:…` uri intact — so one arriving here is refused by the id check rather
+    /// than turning into a request for a track that cannot exist.
+    #[test]
+    fn a_local_file_uri_is_not_a_catalog_id() {
+        assert!(catalog_url("tracks", "spotify:local:::Some+Song:210").is_err());
+    }
+
+    #[test]
+    fn a_fetched_track_becomes_an_entry_spotify_would_recognize() {
+        let raw = serde_json::json!({
+            "uri": "spotify:track:4cOdK2wGLETKBW3PvgPWqT",
+            "name": "Bohemian Rhapsody",
+            "artists": [{ "name": "Queen" }],
+            "external_ids": { "isrc": "GBUM71029604" },
+            "album": { "name": "A Night at the Opera" },
+            "duration_ms": 354_320,
+            "is_playable": true
+        });
+        let entry = entry_from(serde_json::from_value(raw).unwrap());
+
+        assert_eq!(entry.id, "spotify:track:4cOdK2wGLETKBW3PvgPWqT");
+        assert_eq!(entry.title, "Bohemian Rhapsody");
+        assert_eq!(entry.artists, vec!["Queen".to_string()]);
+        // The ISRC is the point of reading the track at all: it is what the duplicate checks
+        // key on, and the webview's player state has no idea what it is.
+        assert_eq!(entry.isrc.as_deref(), Some("GBUM71029604"));
+        assert_eq!(entry.duration_ms, Some(354_320));
+        assert_eq!(entry.is_playable, Some(true));
+        // Spotify stamps these on the push; claiming a time here would date the addition to
+        // whenever the track happened to be read.
+        assert!(entry.added_at.is_none());
+        assert!(entry.added_by.is_none());
+    }
+
+    #[test]
+    fn a_release_year_is_read_from_every_precision_spotify_uses() {
+        // Spotify's `release_date` is one of these three, by how precisely the date is known.
+        assert_eq!(year_of("1975-11-21").as_deref(), Some("1975"));
+        assert_eq!(year_of("1975-11").as_deref(), Some("1975"));
+        assert_eq!(year_of("1975").as_deref(), Some("1975"));
+
+        // Anything else shows no year, rather than a fragment of one that reads like a year.
+        for bad in ["", "197", "19x5", "unknown", "-1975"] {
+            assert!(
+                year_of(bad).is_none(),
+                "should not have read a year from {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_relinked_track_is_stored_under_the_id_the_playlists_reference() {
+        let raw = serde_json::json!({
+            // What `market=from_token` hands back: the uri playable in this market…
+            "uri": "spotify:track:LOCALMARKETVERSION01",
+            "name": "Song",
+            "artists": [{ "name": "A" }],
+            // …and the original it was substituted for, which is what playlist files hold.
+            "linked_from": { "uri": "spotify:track:4cOdK2wGLETKBW3PvgPWqT" }
+        });
+        let entry = entry_from(serde_json::from_value(raw).unwrap());
+
+        assert_eq!(entry.id, "spotify:track:4cOdK2wGLETKBW3PvgPWqT");
+        // Nothing was supplied for these, and absent must not read as a value.
+        assert!(entry.isrc.is_none());
+        assert!(entry.duration_ms.is_none());
+        assert!(entry.is_playable.is_none());
     }
 
     #[test]

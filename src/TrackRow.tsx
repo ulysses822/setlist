@@ -75,6 +75,14 @@ export interface TrackRowProps {
 
   onPlay: (track: TrackEntry) => void;
   onRemove: (index: number) => void;
+
+  /** Ticked in the editor's selection. Always false on a read-only diff row. */
+  isSelected: boolean;
+  /**
+   * The row's checkbox was clicked, with whether shift was held — the host needs that to
+   * work out a range, since only it knows what order the rows are in.
+   */
+  onToggleSelect: (shift: boolean) => void;
 }
 
 /**
@@ -111,6 +119,8 @@ export default function TrackRow({
   onDragEnd,
   onPlay,
   onRemove,
+  isSelected,
+  onToggleSelect,
 }: TrackRowProps) {
   const editable = status === "normal";
   const removed = status === "removed";
@@ -125,7 +135,9 @@ export default function TrackRow({
         isPlaying ? "playing" : ""
       } ${isPlaying && playingActive ? "playing-active" : ""} ${
         canReorder && isDropTarget ? "over" : ""
-      } ${isFlashing ? "flash" : ""} ${unavailable ? "unavailable" : ""} ${diffClass}`}
+      } ${isFlashing ? "flash" : ""} ${unavailable ? "unavailable" : ""} ${diffClass} ${
+        isSelected ? "selected" : ""
+      }`}
       draggable={canReorder}
       onDragStart={
         canReorder
@@ -158,6 +170,23 @@ export default function TrackRow({
       onDragEnd={canReorder ? onDragEnd : undefined}
       onDoubleClick={() => (local || removed ? undefined : onPlay(track))}
     >
+      {/* A diff row keeps the cell but not the checkbox: those rows aren't editable, and the
+          columns have to line up with the editable ones either way. */}
+      {editable ? (
+        <input
+          type="checkbox"
+          className="t-pick"
+          checked={isSelected}
+          aria-label={`Select "${track.title}"`}
+          title="Select (shift-click for a range)"
+          // onClick rather than onChange: only the mouse event carries shiftKey, and a
+          // range selection is the whole reason the host is told about the click at all.
+          onChange={() => {}}
+          onClick={(e) => onToggleSelect(e.shiftKey)}
+        />
+      ) : (
+        <span />
+      )}
       {editable ? (
         canReorder ? (
           <span className="grip" title="Drag to reorder">

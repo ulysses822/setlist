@@ -31,12 +31,6 @@ export default function AllSongsView({
   const [filter, setFilter] = useState("");
   const [sort, setSort] = useState<LibSort>("title");
   const player = useNowPlaying();
-  // Match by bare id, against both the playing uri and its pre-relink original (Spotify
-  // may substitute a market equivalent at playback time; files store the original).
-  const playingId = player?.playing ? bareId(player.playing.uri) : null;
-  const playingLinkedId = player?.playing?.linkedFromUri
-    ? bareId(player.playing.linkedFromUri)
-    : null;
 
   const allSongs = useMemo(() => {
     const map = new Map<string, SongEntry>();
@@ -120,8 +114,7 @@ export default function AllSongsView({
             const local = isLocalTrack(track.id);
             const unavailable = track.is_playable === false;
             const isPlaying =
-              playingId != null &&
-              (bareId(track.id) === playingId || bareId(track.id) === playingLinkedId);
+              player?.isPlaying(track.id) ?? false;
             return (
               <li
                 key={bareId(track.id)}

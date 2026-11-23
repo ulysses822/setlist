@@ -3,11 +3,12 @@ mod git;
 mod history;
 mod metrics;
 mod spotify;
+mod track_id;
 
 use config::AppConfig;
 use spotify::{
     AppState, LocalPlaylist, LocalTrackHit, PlaylistAt, PlaylistFile, PlaylistSummary, Profile,
-    PushResult, SearchResult, SyncStatus, TrackEntry,
+    PushResult, SyncStatus, TrackEntry,
 };
 
 /// The "connect first" invariant, stated once. Almost every Spotify-touching command needs a
@@ -427,13 +428,47 @@ fn search_local_tracks(app: tauri::AppHandle, query: String) -> Result<Vec<Local
     spotify::search_local(config::resolve_data_dir(&cfg)?, query)
 }
 
+/// Search the catalog for tracks, albums and artists at once — one request answers all
+/// three, so the add box can offer an album or an artist without costing extra calls.
 #[tauri::command]
-async fn search_tracks(
+async fn search_catalog(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
     query: String,
-) -> Result<Vec<SearchResult>, String> {
-    spotify::search_tracks(&state, require_client_id(&app)?, query).await
+) -> Result<spotify::CatalogSearch, String> {
+    spotify::search_catalog(&state, require_client_id(&app)?, query).await
+}
+
+/// Every track on an album, in album order, as playlist entries.
+#[tauri::command]
+async fn album_tracks(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    album_id: String,
+) -> Result<Vec<TrackEntry>, String> {
+    spotify::album_tracks(&state, require_client_id(&app)?, album_id).await
+}
+
+/// An artist's top tracks in this market, as playlist entries.
+#[tauri::command]
+async fn artist_top_tracks(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    artist_id: String,
+) -> Result<Vec<TrackEntry>, String> {
+    spotify::artist_top_tracks(&state, require_client_id(&app)?, artist_id).await
+}
+
+/// Read one catalog track as a playlist entry — what "add the song that's playing" adds.
+/// Spotify is asked rather than the webview trusted, so the entry carries the ISRC and
+/// playability a pulled track has.
+#[tauri::command]
+async fn track_entry(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    track_id: String,
+) -> Result<TrackEntry, String> {
+    spotify::track_entry(&state, require_client_id(&app)?, track_id).await
 }
 
 /// Find a near-identical, playable stand-in for an unavailable (greyed-out) track — checked
@@ -660,7 +695,10 @@ pub fn run() {
             follow_playlist,
             track_playlists,
             search_local_tracks,
-            search_tracks,
+            search_catalog,
+            album_tracks,
+            artist_top_tracks,
+            track_entry,
             suggest_replacement,
             push_playlist,
             sync_status,

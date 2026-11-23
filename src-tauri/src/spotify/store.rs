@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::err;
+use crate::track_id::bare_track_id;
 
 #[derive(Serialize, Deserialize)]
 pub struct PlaylistFile {
@@ -546,17 +547,6 @@ pub fn read_all_local(
     }
     out.sort_by_key(|p| p.name.to_lowercase());
     Ok(out)
-}
-
-/// Bare track id: the last uri segment, or the whole uri for `spotify:local:` files
-/// (their last segment is the duration, which collides across unrelated songs).
-/// Mirrors the frontend's bareId and metrics::bare_id semantics.
-fn bare_track_id(uri: &str) -> &str {
-    if uri.starts_with("spotify:local:") {
-        uri
-    } else {
-        uri.rsplit(':').next().unwrap_or(uri)
-    }
 }
 
 /// Files of every (non-archived) local playlist whose effective tracks contain any of the

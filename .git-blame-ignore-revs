@@ -12,3 +12,7 @@
 # Convert the frontend doc comments from Rust-style /// to /** */, so TypeScript
 # shows them on hover. No code changed.
 79af921ed9835c7cdb27d3bba94492ca4fb2da44
+
+# Store Library.tsx with LF, as .gitattributes already required. Line endings
+# only; the file was otherwise byte-identical.
+0af627ffc985629e06f8b5cd00c3a7430f5c3340
