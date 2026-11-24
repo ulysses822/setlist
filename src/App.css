@@ -189,6 +189,18 @@ body {
   margin-top: 6px;
 }
 
+/* Quiet by design: wanted when you're reporting a problem or checking an update landed,
+   and ignorable the rest of the time. Tabular figures so it doesn't jiggle between
+   versions of different digit widths. */
+.version {
+  color: var(--muted);
+  opacity: 0.7;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  margin-top: 8px;
+  user-select: text;
+}
+
 .card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -707,6 +719,7 @@ body {
 
 .seg {
   flex: 1;
+  white-space: nowrap;
   background: transparent;
   border: none;
   color: var(--muted);
@@ -1816,11 +1829,13 @@ body {
 
 .lib-controls .filter {
   flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
 }
 
 .lib-sort {
   display: inline-flex;
+  flex: 0 0 auto;
   gap: 2px;
   background: var(--sunken);
   border: 1px solid var(--border);
@@ -2437,6 +2452,8 @@ body {
   cursor: pointer;
   font-size: 13px;
   text-decoration: underline;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .link:disabled {

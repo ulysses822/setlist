@@ -417,6 +417,7 @@ function App() {
       <header className="hero">
         <h1 className="wordmark">Setlist</h1>
         <p className="tagline">Curate, version &amp; analyze your Spotify playlists.</p>
+        <p className="version">v{__APP_VERSION__}</p>
       </header>
 
       <section className="card">
