@@ -235,8 +235,22 @@ Because the data folder is a git repo, Setlist versions it **for you** — no te
 needed. The top-bar chip shows when there's something to commit; open it to review every
 change (it writes the commit message: which songs you added, removed, or reordered in each
 playlist), then **Commit** and **Push** to your remote. Pulls, curation, and new playlists
-are versioned the same way. (Merging stays a terminal job — if the remote has moved on, the
-push tells you to pull first.)
+are versioned the same way.
+
+**Where the terminal still comes in.** Setlist covers the day-to-day loop — change, review,
+commit, push — and stops there on purpose. Reading back through the history, restoring an
+earlier version of a playlist, reverting a commit and resolving a merge are git's job, and
+git's own tools do them better than a panel in here would. The chip tells you when the
+remote has moved so you know to go and pull; it won't merge for you. Commit messages are
+written from the real diff, so `git log --oneline` in that folder already reads as a list of
+what you changed, not a wall of hashes.
+
+**Editing the files by hand is fine** — it's your repo, and plain JSON is the point. One
+rule, and it only runs one way: don't hand-edit a playlist you're about to pull or push.
+Setlist writes a playlist file from its own copy without reading yours first, so your change
+would go silently. Finish in the app, then edit. Reading is safe either way — the app
+notices a changed file and picks it up. Leave `staged/` and `cache/` to the app; they're
+git-ignored and never reach the remote.
 
 Keep that repo **private**: playlists and play history are personal data. Your Spotify
 refresh token never touches disk — it lives in the OS credential manager (Windows
