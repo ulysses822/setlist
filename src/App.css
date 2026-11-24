@@ -3093,6 +3093,21 @@ button.status-badge:hover {
   border-color: rgb(var(--accent-rgb) / 0.4);
 }
 
+/* Behind reads as information, not success: the remote moved and the app can't merge, so this
+   is the one git state the user has to leave the app to resolve. Blue rather than the warn
+   amber of uncommitted changes — nothing is wrong yet, it is only about to be. */
+.git-chip.behind {
+  color: var(--info);
+  background: rgb(var(--info-rgb) / 0.12);
+  border-color: rgb(var(--info-rgb) / 0.4);
+}
+
+/* Synced-as-far-as-we-know. Styled as the resting state, since an unreachable remote is
+   usually just being offline, but the label says "locally" so it doesn't overclaim. */
+.git-chip.unknown {
+  color: var(--muted);
+}
+
 .git-backdrop {
   position: fixed;
   inset: 0;

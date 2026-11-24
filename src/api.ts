@@ -177,6 +177,10 @@ export interface RepoStatus {
   has_remote: boolean;
   has_upstream: boolean;
   ahead: number; // local commits not yet on the remote
+  behind: number; // remote commits we don't have; the app can't merge, so this is a warning
+  /** Whether the fetch feeding `behind` reached the remote. False makes `behind: 0` mean
+   *  "nothing known to be missing" rather than "up to date". */
+  remote_checked: boolean;
   clean: boolean;
   identity_ok: boolean; // git user.name + user.email are set
   changes: FileChange[];

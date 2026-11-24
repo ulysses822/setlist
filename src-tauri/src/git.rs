@@ -35,6 +35,13 @@ pub struct RepoStatus {
     pub has_upstream: bool,
     /// Local commits not yet on the remote (what a Push would send).
     pub ahead: u32,
+    /// Remote commits we don't have (what a pull would bring). The app can't merge, so this
+    /// is a warning rather than an action: edit on top of these and the next push is rejected.
+    pub behind: u32,
+    /// Whether the fetch behind `behind` actually reached the remote on this call. False means
+    /// the count is as stale as the last successful fetch, so "0" means "nothing known to be
+    /// missing", not "up to date" — the whole point of the field is not to imply the latter.
+    pub remote_checked: bool,
     /// No uncommitted changes in the working tree.
     pub clean: bool,
     /// Both git user.name and user.email are set (committing fails otherwise).
@@ -138,7 +145,7 @@ fn git_program() -> Result<&'static Path, String> {
     Ok(GIT_EXE.get_or_init(|| found).as_path())
 }
 
-fn run(dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
+fn git_cmd(dir: &Path, args: &[&str]) -> Result<Command, String> {
     let mut cmd = Command::new(git_program()?);
     cmd.arg("-C").arg(dir).args(args);
     #[cfg(windows)]
@@ -146,10 +153,15 @@ fn run(dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    Ok(cmd)
+}
+
+fn run(dir: &Path, args: &[&str]) -> Result<std::process::Output, String> {
+    let cmd = git_cmd(dir, args);
     // "Not installed" is `git_program`'s answer above, so a failure here is the spawn itself:
     // the binary was found and then couldn't be run (permissions, a broken shim, an antivirus
     // holding it). Say which of the two happened rather than blaming PATH for both.
-    cmd.output().map_err(|e| {
+    cmd?.output().map_err(|e| {
         let exe = git_program()
             .map(|p| p.display().to_string())
             .unwrap_or_default();
@@ -220,6 +232,14 @@ pub fn status(dir: &Path) -> Result<RepoStatus, String> {
     } else {
         0
     };
+    // Fetch first: without it `behind` would only ever move after a rejected push, which is
+    // exactly the moment it's too late to be useful.
+    let remote_checked = has_remote && fetch_quietly(dir, &branch);
+    let behind = if has_remote {
+        behind_count(dir, &branch, has_upstream)
+    } else {
+        0
+    };
 
     let name_set = run_ok(dir, &["config", "user.name"])
         .map(|s| !s.is_empty())
@@ -244,6 +264,8 @@ pub fn status(dir: &Path) -> Result<RepoStatus, String> {
         has_remote,
         has_upstream,
         ahead,
+        behind,
+        remote_checked,
         clean,
         identity_ok: name_set && email_set,
         changes,
@@ -252,6 +274,50 @@ pub fn status(dir: &Path) -> Result<RepoStatus, String> {
 
 /// Commits on HEAD not yet on the remote. Uses the upstream when set; otherwise falls back
 /// to `origin/<branch>` if it exists, else treats every commit on HEAD as unpushed.
+/// Refresh the remote-tracking refs so `behind` means something.
+///
+/// Never blocks: `status` runs at app start and on every panel open, so a fetch that stopped on
+/// a credential prompt would hang the window with no way to answer it. `GIT_TERMINAL_PROMPT=0`
+/// covers git's own prompt and `credential.interactive=false` covers Git Credential Manager's
+/// dialog, which the env var alone does not. A refused or offline fetch is not an error here —
+/// the caller reports that the refs weren't refreshed rather than failing the whole status read.
+fn fetch_quietly(dir: &Path, branch: &str) -> bool {
+    let remote = branch_remote(dir, branch);
+    let args = [
+        "-c",
+        "credential.interactive=false",
+        "fetch",
+        "--quiet",
+        &remote,
+    ];
+    let Ok(mut cmd) = git_cmd(dir, &args) else {
+        return false;
+    };
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.output().map(|o| o.status.success()).unwrap_or(false)
+}
+
+/// Commits on the remote-tracking ref that `HEAD` doesn't have — `ahead_count`'s mirror, and
+/// deliberately the same shape, including falling back to `origin/<branch>` without an upstream.
+/// With no remote-tracking ref at all the answer is 0: nothing is *known* to be missing.
+fn behind_count(dir: &Path, branch: &str, has_upstream: bool) -> u32 {
+    let origin_branch = format!("origin/{branch}");
+    let range = if has_upstream {
+        "HEAD..@{u}".to_string()
+    } else if run(dir, &["rev-parse", "--verify", "--quiet", &origin_branch])
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        format!("HEAD..{origin_branch}")
+    } else {
+        return 0;
+    };
+    run_ok(dir, &["rev-list", "--count", &range])
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
+
 fn ahead_count(dir: &Path, branch: &str, has_upstream: bool) -> u32 {
     let origin_branch = format!("origin/{branch}");
     let range = if has_upstream {
@@ -1621,5 +1687,88 @@ mod tests {
         let _ = std::fs::remove_dir_all(&work);
         let _ = std::fs::remove_dir_all(&other);
         let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn status_counts_the_commits_the_remote_has_and_we_do_not() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let (remote, work, logger) = remote_with_logger("behind");
+
+        // Nothing has moved yet, and the work clone has just pushed.
+        let fresh = status(&work).unwrap();
+        assert_eq!((fresh.ahead, fresh.behind), (0, 0), "level with the remote");
+        assert!(
+            fresh.remote_checked,
+            "a local bare remote is always reachable"
+        );
+
+        // Someone else lands a commit. The work clone has not fetched, so only status()
+        // doing it for us can see this.
+        append_history(&logger, r#"{"id":"t1","at":"2026-01-01T00:00:00Z"}"#);
+        git(&logger, &["add", "-A"]);
+        git(&logger, &["commit", "-qm", "log a play"]);
+        git(&logger, &["push", "-q", "origin", "main"]);
+
+        let s = status(&work).unwrap();
+        assert_eq!(s.behind, 1, "one commit to pull");
+        assert_eq!(s.ahead, 0, "and nothing of ours to push");
+
+        let _ = std::fs::remove_dir_all(&work);
+        let _ = std::fs::remove_dir_all(&logger);
+        let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    /// The two counts answer different questions, and the fetch that feeds `behind` must not
+    /// disturb `ahead`: advancing the remote-tracking ref adds commits that `HEAD` doesn't
+    /// reach, so `@{u}..HEAD` is unchanged by it.
+    #[test]
+    fn a_diverged_repo_is_both_ahead_and_behind() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let (remote, work, logger) = remote_with_logger("diverged");
+
+        append_history(&logger, r#"{"id":"t1","at":"2026-01-01T00:00:00Z"}"#);
+        git(&logger, &["add", "-A"]);
+        git(&logger, &["commit", "-qm", "log a play"]);
+        git(&logger, &["push", "-q", "origin", "main"]);
+
+        write_playlist(&work, "road.json", "Road Trip", &["a", "b", "c"]);
+        git(&work, &["add", "-A"]);
+        git(&work, &["commit", "-qm", "add a song"]);
+
+        let s = status(&work).unwrap();
+        assert_eq!((s.ahead, s.behind), (1, 1), "diverged one commit each way");
+
+        let _ = std::fs::remove_dir_all(&work);
+        let _ = std::fs::remove_dir_all(&logger);
+        let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    /// Without a remote there is nothing to be behind, and nothing was checked — "0" here must
+    /// not read as "up to date with somewhere".
+    #[test]
+    fn a_local_only_repo_is_never_behind_and_never_checked() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let work = unique_dir("noremote");
+        git(&work, &["init", "-q"]);
+        git(&work, &["config", "user.name", "Test"]);
+        git(&work, &["config", "user.email", "test@example.com"]);
+        write_playlist(&work, "x.json", "X", &["a"]);
+        git(&work, &["add", "-A"]);
+        git(&work, &["commit", "-qm", "init"]);
+
+        let s = status(&work).unwrap();
+        assert_eq!(s.behind, 0);
+        assert!(!s.remote_checked, "no remote means nothing was checked");
+
+        let _ = std::fs::remove_dir_all(&work);
     }
 }

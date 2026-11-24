@@ -61,14 +61,28 @@ export function GitChip() {
   const { status, setOpen } = git;
 
   const changeCount = status.changes.length;
+  // Behind outranks the rest: it is the only state where carrying on costs you something,
+  // because committing on top of it is what turns a fast-forward into a merge the app can't
+  // do. Uncommitted changes and unpushed commits can both wait.
   let cls = "synced";
   let label = "✓ Synced";
-  if (changeCount > 0) {
+  if (status.behind > 0) {
+    cls = "behind";
+    label =
+      status.ahead > 0
+        ? `↕ ${status.ahead}↑ ${status.behind}↓ diverged`
+        : `↓ ${status.behind} to pull`;
+  } else if (changeCount > 0) {
     cls = "dirty";
     label = `● ${changeCount} change${changeCount === 1 ? "" : "s"}`;
   } else if (status.ahead > 0) {
     cls = "ahead";
     label = `↑ ${status.ahead} to push`;
+  } else if (status.has_remote && !status.remote_checked) {
+    // Never claim "Synced" off a fetch that didn't happen — that is the same silence this
+    // field exists to end, one level up.
+    cls = "unknown";
+    label = "✓ Synced locally";
   }
 
   return (
@@ -141,6 +155,8 @@ export function GitPanel() {
   const clean = status?.clean ?? true;
   const identityOk = status?.identity_ok ?? true;
   const ahead = status?.ahead ?? 0;
+  const behind = status?.behind ?? 0;
+  const remoteChecked = status?.remote_checked ?? false;
   const hasRemote = status?.has_remote ?? false;
   const canCommit = !clean && identityOk && msg.trim() !== "" && busy === null;
   const canPush = ahead > 0 && hasRemote && busy === null;
@@ -205,9 +221,18 @@ export function GitPanel() {
               <span className="hint">
                 {!hasRemote
                   ? "No remote — add one (git remote add origin …) to push."
+                  : behind > 0
+                  ? `${behind} commit${behind === 1 ? "" : "s"} on the remote you don't have. ` +
+                    `Pull in a terminal first — ${
+                      ahead > 0
+                        ? "the branches have diverged, so this push will be rejected."
+                        : "committing on top of this will get the next push rejected."
+                    }`
                   : ahead > 0
                   ? `${ahead} commit${ahead === 1 ? "" : "s"} to push`
-                  : "Up to date with the remote."}
+                  : remoteChecked
+                  ? "Up to date with the remote."
+                  : "Nothing local to push. Couldn't reach the remote to check for incoming commits."}
               </span>
               <button className="btn ghost" onClick={doPush} disabled={!canPush}>
                 {busy === "push" ? "Pushing…" : "Push"}
