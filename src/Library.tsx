@@ -289,6 +289,16 @@ export default function Library() {
     void loadList();
   }, []);
 
+  // A pull rewrites playlist files underneath us, so everything on screen is from before it.
+  // loadList isn't memoised (it closes over the hook's state), so it goes through a ref:
+  // naming it as a dependency would re-read the library on every render.
+  const loadListRef = useRef(loadList);
+  loadListRef.current = loadList;
+  const pulledAt = git?.pulledAt ?? 0;
+  useEffect(() => {
+    if (pulledAt) void loadListRef.current();
+  }, [pulledAt]);
+
   // Success/status popups are transient: auto-dismiss after a few seconds. Errors stay
   // until dismissed so they aren't missed.
   useEffect(() => {
