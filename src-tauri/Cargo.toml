@@ -1,6 +1,6 @@
 [package]
 name = "setlist"
-version = "0.2.1"
+version = "0.2.2"
 description = "Curate, version & analyze your Spotify playlists"
 authors = ["ulysses822"]
 license = "GPL-3.0-only"
