@@ -3241,10 +3241,20 @@ button.status-badge:hover {
 .git-push {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   padding-top: 14px;
   border-top: 1px solid var(--border);
+}
+
+/* The row holds a sentence and up to two buttons. The sentence takes the slack so the
+   buttons stay together on the right; space-between would strand Pull in the middle. */
+.git-push .hint {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.git-push .btn {
+  flex: 0 0 auto;
 }
 
 .git-result {

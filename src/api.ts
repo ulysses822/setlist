@@ -191,6 +191,12 @@ export interface PushOutcome {
   message: string;
 }
 
+export interface PullOutcome {
+  /** False when there was nothing to take, or when the branches diverged. */
+  pulled: boolean;
+  message: string;
+}
+
 // Aggregated plays for one track (id is the raw uri; re-key with bareId to join playlists).
 export interface PlayStat {
   id: string;
@@ -266,6 +272,7 @@ export const api = {
   gitSuggestMessage: () => invoke<string>("git_suggest_message"),
   gitCommit: (message: string) => invoke<RepoStatus>("git_commit", { message }),
   gitPush: () => invoke<PushOutcome>("git_push"),
+  gitPull: () => invoke<PullOutcome>("git_pull"),
   // Per-track listening stats from the data repo's plays.jsonl (stale-track view).
   historyStats: () => invoke<HistoryReport>("history_stats"),
   // Open an allowlisted external page (GitHub / Spotify dashboard) in the browser.

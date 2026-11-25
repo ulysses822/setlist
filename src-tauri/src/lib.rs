@@ -199,6 +199,14 @@ fn git_push(app: tauri::AppHandle) -> Result<git::PushOutcome, String> {
     git::push(&data_dir)
 }
 
+/// Fast-forward the data repo onto the remote. Refuses anything that would need a merge.
+#[tauri::command(async)]
+fn git_pull(app: tauri::AppHandle) -> Result<git::PullOutcome, String> {
+    let cfg = config::load(&app)?;
+    let data_dir = config::resolve_data_dir(&cfg)?;
+    git::pull(&data_dir)
+}
+
 /// Per-track listening stats from the data repo's plays.jsonl (for the stale-track view).
 #[tauri::command(async)]
 fn history_stats(app: tauri::AppHandle) -> Result<history::HistoryReport, String> {
@@ -668,6 +676,7 @@ pub fn run() {
             git_suggest_message,
             git_commit,
             git_push,
+            git_pull,
             history_stats,
             open_external,
             rate_limit_status,

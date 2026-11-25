@@ -6,7 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, type RepoStatus } from "./api";
+import { api, type PullOutcome, type RepoStatus } from "./api";
 
 // Data-repo version control: the app commits and pushes the data repo (playlists, curation,
 // history) so the user never has to drop to a terminal. State lives in one provider so the
@@ -16,6 +16,12 @@ interface GitApi {
   /** Set when status couldn't be read (no data folder, or not a git repo). */
   error: string | null;
   refresh: () => void;
+  /** Fast-forward onto the remote. Lives here rather than in the panel because a pull
+   *  rewrites playlist files, and `pulledAt` is how the rest of the app hears about it. */
+  pull: () => Promise<PullOutcome>;
+  /** Bumped when a pull actually took commits. Watch it to re-read anything from the data
+   *  folder — the files on disk are not the ones you read before. */
+  pulledAt: number;
   open: boolean;
   setOpen: (o: boolean) => void;
 }
@@ -27,6 +33,7 @@ export function GitProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<RepoStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  const [pulledAt, setPulledAt] = useState(0);
 
   const refresh = useCallback(() => {
     api
@@ -41,6 +48,14 @@ export function GitProvider({ children }: { children: ReactNode }) {
       });
   }, []);
 
+  const pull = useCallback(async () => {
+    const out = await api.gitPull();
+    // Only on a real fast-forward: a refusal changed no files, so nothing needs re-reading.
+    if (out.pulled) setPulledAt(Date.now());
+    refresh();
+    return out;
+  }, [refresh]);
+
   useEffect(() => {
     refresh();
   }, [refresh]);
@@ -50,7 +65,9 @@ export function GitProvider({ children }: { children: ReactNode }) {
   }, [open, refresh]);
 
   return (
-    <Ctx.Provider value={{ status, error, refresh, open, setOpen }}>{children}</Ctx.Provider>
+    <Ctx.Provider value={{ status, error, refresh, pull, pulledAt, open, setOpen }}>
+      {children}
+    </Ctx.Provider>
   );
 }
 
@@ -96,7 +113,7 @@ export function GitChip() {
   );
 }
 
-type Busy = null | "commit" | "push";
+type Busy = null | "commit" | "push" | "pull";
 
 export function GitPanel() {
   const git = useGit();
@@ -145,6 +162,21 @@ export function GitPanel() {
       const out = await api.gitPush();
       setResult({ kind: "ok", text: out.message });
       git.refresh();
+    } catch (e) {
+      setResult({ kind: "err", text: String(e) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function doPull() {
+    if (!git) return;
+    setBusy("pull");
+    setResult(null);
+    try {
+      const out = await git.pull();
+      // A refusal is not an error: nothing was changed and the message says what to do.
+      setResult({ kind: out.pulled ? "ok" : "err", text: out.message });
     } catch (e) {
       setResult({ kind: "err", text: String(e) });
     } finally {
@@ -221,19 +253,23 @@ export function GitPanel() {
               <span className="hint">
                 {!hasRemote
                   ? "No remote — add one (git remote add origin …) to push."
+                  : behind > 0 && ahead > 0
+                  ? `Diverged: ${behind} commit${behind === 1 ? "" : "s"} on the remote, ` +
+                    `${ahead} of yours. Setlist only fast-forwards, so this one needs ` +
+                    `\`git pull --rebase\` in your data folder.`
                   : behind > 0
-                  ? `${behind} commit${behind === 1 ? "" : "s"} on the remote you don't have. ` +
-                    `Pull in a terminal first — ${
-                      ahead > 0
-                        ? "the branches have diverged, so this push will be rejected."
-                        : "committing on top of this will get the next push rejected."
-                    }`
+                  ? `${behind} commit${behind === 1 ? "" : "s"} to pull`
                   : ahead > 0
                   ? `${ahead} commit${ahead === 1 ? "" : "s"} to push`
                   : remoteChecked
                   ? "Up to date with the remote."
                   : "Nothing local to push. Couldn't reach the remote to check for incoming commits."}
               </span>
+              {behind > 0 && ahead === 0 && (
+                <button className="btn" onClick={doPull} disabled={busy !== null}>
+                  {busy === "pull" ? "Pulling…" : "Pull"}
+                </button>
+              )}
               <button className="btn ghost" onClick={doPush} disabled={!canPush}>
                 {busy === "push" ? "Pushing…" : "Push"}
               </button>

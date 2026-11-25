@@ -55,6 +55,13 @@ pub struct PushOutcome {
     pub message: String,
 }
 
+#[derive(Serialize)]
+pub struct PullOutcome {
+    /// False when there was nothing to take, or when the branches have diverged.
+    pub pulled: bool,
+    pub message: String,
+}
+
 // --- low-level git runner ---------------------------------------------------
 
 /// Windows gives every child process of a GUI app its own console window. The release build
@@ -220,12 +227,7 @@ pub fn status(dir: &Path) -> Result<RepoStatus, String> {
     let branch =
         run_ok(dir, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|_| "HEAD".into());
     let has_remote = !run_ok(dir, &["remote"]).unwrap_or_default().is_empty();
-    let has_upstream = run(
-        dir,
-        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-    )
-    .map(|o| o.status.success())
-    .unwrap_or(false);
+    let has_upstream = has_upstream(dir);
     // "Ahead" only means something when there's somewhere to push to.
     let ahead = if has_remote {
         ahead_count(dir, &branch, has_upstream)
@@ -300,6 +302,17 @@ fn fetch_quietly(dir: &Path, branch: &str) -> bool {
 /// Commits on the remote-tracking ref that `HEAD` doesn't have — `ahead_count`'s mirror, and
 /// deliberately the same shape, including falling back to `origin/<branch>` without an upstream.
 /// With no remote-tracking ref at all the answer is 0: nothing is *known* to be missing.
+/// Whether the current branch has an upstream configured. Both counts need it to know
+/// which ref to measure against, and `pull` needs it to name one to merge.
+fn has_upstream(dir: &Path) -> bool {
+    run(
+        dir,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+    )
+    .map(|o| o.status.success())
+    .unwrap_or(false)
+}
+
 fn behind_count(dir: &Path, branch: &str, has_upstream: bool) -> u32 {
     let origin_branch = format!("origin/{branch}");
     let range = if has_upstream {
@@ -880,6 +893,84 @@ fn absorb_poller_commits(dir: &Path, branch: &str) -> Result<bool, String> {
         ));
     }
     Ok(true)
+}
+
+/// Take the remote's commits, but only when doing so is a pointer move.
+///
+/// `status` already fetched (that is what `behind` is counted from), so the objects are
+/// local and this is an offline operation — no credentials, nothing that can hang. The fetch
+/// is repeated anyway because the panel can sit open while the logger pushes, and a stale
+/// count would merge less than the user was shown.
+///
+/// `--ff-only` is the whole safety argument. Fast-forwarding cannot conflict and cannot lose
+/// a local commit: it moves the branch to a commit that already contains ours. The moment
+/// that is not true — the branches diverged, or an incoming file is one the working tree has
+/// modified — git refuses and nothing has happened. The app does not merge, so a refusal is
+/// reported, not worked around.
+pub fn pull(dir: &Path) -> Result<PullOutcome, String> {
+    if !is_repo(dir) {
+        return Err("Your data folder isn't a git repository.".into());
+    }
+    let branch = current_branch(dir);
+    fetch_quietly(dir, &branch);
+
+    let upstream = has_upstream(dir);
+    if !upstream {
+        return Err(
+            "This branch isn't tracking a remote branch, so there's nothing to pull from. \
+             Push once to set it up."
+                .into(),
+        );
+    }
+
+    let behind = behind_count(dir, &branch, upstream);
+    if behind == 0 {
+        return Ok(PullOutcome {
+            pulled: false,
+            message: "Nothing to pull — you already have everything on the remote.".into(),
+        });
+    }
+
+    let ahead = ahead_count(dir, &branch, upstream);
+    if ahead > 0 {
+        return Ok(PullOutcome {
+            pulled: false,
+            message: format!(
+                "Can't pull without merging: the remote has {behind} commit{} you don't have \
+                 and you have {ahead} it doesn't. Setlist only fast-forwards. Run `git pull \
+                 --rebase` in your data folder to sort it out.",
+                if behind == 1 { "" } else { "s" },
+            ),
+        });
+    }
+
+    let out = run(dir, &["merge", "--ff-only", "--quiet", "@{u}"])?;
+    if out.status.success() {
+        return Ok(PullOutcome {
+            pulled: true,
+            message: format!(
+                "Pulled {behind} commit{}.",
+                if behind == 1 { "" } else { "s" }
+            ),
+        });
+    }
+
+    // The realistic refusal with no divergence: an incoming commit touches a file the working
+    // tree has changed. Git names the files; committing first is what clears it, and that is
+    // the button directly above this one.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lower = stderr.to_lowercase();
+    if lower.contains("local changes") || lower.contains("would be overwritten") {
+        return Ok(PullOutcome {
+            pulled: false,
+            message: format!(
+                "Can't pull yet — the incoming commits change files you've edited here. \
+                 Commit your changes first, then pull.\n\n{}",
+                stderr.trim()
+            ),
+        });
+    }
+    Err(stderr.trim().to_string())
 }
 
 pub fn push(dir: &Path) -> Result<PushOutcome, String> {
@@ -1770,5 +1861,93 @@ mod tests {
         assert!(!s.remote_checked, "no remote means nothing was checked");
 
         let _ = std::fs::remove_dir_all(&work);
+    }
+
+    #[test]
+    fn pull_fast_forwards_onto_the_remote() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let (remote, work, logger) = remote_with_logger("pullff");
+
+        append_history(&logger, r#"{"id":"t1","at":"2026-01-01T00:00:00Z"}"#);
+        git(&logger, &["add", "-A"]);
+        git(&logger, &["commit", "-qm", "log a play"]);
+        git(&logger, &["push", "-q", "origin", "main"]);
+
+        let out = pull(&work).unwrap();
+        assert!(out.pulled, "got: {}", out.message);
+        assert!(
+            work.join("history/plays.jsonl").exists(),
+            "the logger's file is now here"
+        );
+        let s = status(&work).unwrap();
+        assert_eq!((s.ahead, s.behind), (0, 0), "level again");
+
+        let _ = std::fs::remove_dir_all(&work);
+        let _ = std::fs::remove_dir_all(&logger);
+        let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn pull_with_nothing_incoming_says_so_rather_than_failing() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let (remote, work, logger) = remote_with_logger("pullnoop");
+
+        let out = pull(&work).unwrap();
+        assert!(!out.pulled);
+        assert!(
+            out.message.to_lowercase().contains("nothing to pull"),
+            "got: {}",
+            out.message
+        );
+
+        let _ = std::fs::remove_dir_all(&work);
+        let _ = std::fs::remove_dir_all(&logger);
+        let _ = std::fs::remove_dir_all(&remote);
+    }
+
+    /// The case the button exists to stay out of. Diverged is the one state a fast-forward
+    /// can't express, and guessing at it is how an app loses someone's commits.
+    #[test]
+    fn pull_refuses_to_merge_a_diverged_branch_and_leaves_it_alone() {
+        if !git_available() {
+            eprintln!("skipping: git not available");
+            return;
+        }
+        let (remote, work, logger) = remote_with_logger("pulldiv");
+
+        append_history(&logger, r#"{"id":"t1","at":"2026-01-01T00:00:00Z"}"#);
+        git(&logger, &["add", "-A"]);
+        git(&logger, &["commit", "-qm", "log a play"]);
+        git(&logger, &["push", "-q", "origin", "main"]);
+
+        write_playlist(&work, "road.json", "Road Trip", &["a", "b", "c"]);
+        git(&work, &["add", "-A"]);
+        git(&work, &["commit", "-qm", "add a song"]);
+        let before = run_ok(&work, &["rev-parse", "HEAD"]).unwrap();
+
+        let out = pull(&work).unwrap();
+        assert!(!out.pulled, "must not merge");
+        assert!(
+            out.message.to_lowercase().contains("merging"),
+            "got: {}",
+            out.message
+        );
+        assert_eq!(
+            run_ok(&work, &["rev-parse", "HEAD"]).unwrap(),
+            before,
+            "a refusal changes nothing"
+        );
+        let s = status(&work).unwrap();
+        assert_eq!((s.ahead, s.behind), (1, 1), "still diverged, untouched");
+
+        let _ = std::fs::remove_dir_all(&work);
+        let _ = std::fs::remove_dir_all(&logger);
+        let _ = std::fs::remove_dir_all(&remote);
     }
 }
