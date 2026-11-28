@@ -197,6 +197,24 @@ export interface PullOutcome {
   message: string;
 }
 
+/** One play, as the log recorded it. Carries its own title and artists because the whole
+ *  point of the log view is the plays whose track no playlist holds any more. */
+export interface Play {
+  track_id: string;
+  played_at: string;
+  title: string;
+  artists: string[];
+  /** False when no active playlist holds this track. Archived ones don't count. */
+  in_library: boolean;
+}
+
+export interface PlayLog {
+  has_file: boolean; // false when history/plays.jsonl doesn't exist yet
+  tracked_since: string | null;
+  total_plays: number;
+  plays: Play[]; // newest first
+}
+
 // Aggregated plays for one track (id is the raw uri; re-key with bareId to join playlists).
 export interface PlayStat {
   id: string;
@@ -273,6 +291,8 @@ export const api = {
   gitCommit: (message: string) => invoke<RepoStatus>("git_commit", { message }),
   gitPush: () => invoke<PushOutcome>("git_push"),
   gitPull: () => invoke<PullOutcome>("git_pull"),
+  // The whole play log, newest first, for the History tab.
+  historyLog: () => invoke<PlayLog>("history_log"),
   // Per-track listening stats from the data repo's plays.jsonl (stale-track view).
   historyStats: () => invoke<HistoryReport>("history_stats"),
   // Open an allowlisted external page (GitHub / Spotify dashboard) in the browser.

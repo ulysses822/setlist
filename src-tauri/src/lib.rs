@@ -215,6 +215,24 @@ fn history_stats(app: tauri::AppHandle) -> Result<history::HistoryReport, String
     history::read_plays(&data_dir)
 }
 
+/// The whole play log, newest first, for the History tab.
+///
+/// Composes the two reads rather than letting `history` reach into `store`: the log is one
+/// file and the library is a directory walk, and keeping `read_log` a function of a set
+/// leaves it testable without either.
+#[tauri::command(async)]
+fn history_log(app: tauri::AppHandle) -> Result<history::PlayLog, String> {
+    let cfg = config::load(&app)?;
+    let data_dir = config::resolve_data_dir(&cfg)?;
+    let staging = config::staging_dir(&data_dir)?;
+    let library_ids = spotify::read_all_local(data_dir.clone(), staging)?
+        .into_iter()
+        .flat_map(|p| p.tracks)
+        .map(|t| track_id::bare_track_id(&t.id).to_string())
+        .collect();
+    history::read_log(&data_dir, &library_ids)
+}
+
 /// Open an external page in the default browser. Restricted to the hosts the Setup screen
 /// links to — the app deliberately doesn't ship a general-purpose URL opener.
 #[tauri::command(async)]
@@ -678,6 +696,7 @@ pub fn run() {
             git_push,
             git_pull,
             history_stats,
+            history_log,
             open_external,
             rate_limit_status,
             spotify_login,

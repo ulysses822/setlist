@@ -4,11 +4,12 @@ import Library from "./Library";
 import { PlaybackBar, usePlayer } from "./player";
 import { useRateLimit } from "./rateLimit";
 import { GitChip, GitPanel, useGit } from "./git";
+import HistoryView from "./HistoryView";
 import { ThemeToggle } from "./theme";
 import * as prefs from "./prefs";
 import "./App.css";
 
-type Tab = "library" | "setup";
+type Tab = "library" | "history" | "setup";
 
 // Human-readable cooldown: hours+minutes for long waits, minutes+seconds for medium,
 // plain seconds under a minute.
@@ -50,6 +51,12 @@ function Nav({
           onClick={() => setTab("library")}
         >
           Library
+        </button>
+        <button
+          className={`tab ${tab === "history" ? "active" : ""}`}
+          onClick={() => setTab("history")}
+        >
+          History
         </button>
       </div>
       <div className="nav-right">
@@ -404,6 +411,17 @@ function App() {
       <div className="shell">
         <Nav tab={tab} setTab={setTab} connected={connected} />
         {prefsReady && <Library />}
+        <PlaybackBar />
+        <GitPanel />
+      </div>
+    );
+  }
+
+  if (tab === "history") {
+    return (
+      <div className="shell">
+        <Nav tab={tab} setTab={setTab} connected={connected} />
+        <HistoryView />
         <PlaybackBar />
         <GitPanel />
       </div>
