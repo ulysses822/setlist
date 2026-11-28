@@ -82,7 +82,19 @@ jobs:
 
       # Same cache as ci.yml's rust job, keyed the same way: a release should not pay for a
       # cold Tauri dependency tree when a push on the same lockfile already warmed one.
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      #
+      # Restore-only, which is `actions/cache/restore` rather than `actions/cache` — the
+      # sub-action declares no `post:`, so there is no save step at all. Saving from here was
+      # pure waste in both directions. The key is hashFiles(Cargo.lock) and every release is
+      # preceded by a version bump, so the exact key never exists and the save always ran;
+      # and the push that carried the bump has ci.yml racing for the same key, which it wins,
+      # so the tarball lost anyway. v0.2.4 spent 7m55s of a 17m07s run compressing ~2GB and
+      # then logged "Unable to reserve cache … another job may be creating this cache".
+      #
+      # ci.yml still saves, on every push. Nothing here is worth keeping that it does not
+      # already have: a release adds target/release, and the next release's bump invalidates
+      # the key before anything could restore it.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
