@@ -196,7 +196,7 @@ export function DeletePlaylistModal({
         <p className="confirm-msg">
           This unfollows <b>{target.name}</b> on Spotify (removing it from your library) and
           deletes it from Setlist, including any unsent edits. You can only get it back by
-          importing it again.
+          refreshing it from Spotify.
         </p>
         <p className="hint">
           Type the playlist name to confirm: <b>{target.name}</b>

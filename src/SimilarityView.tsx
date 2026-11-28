@@ -286,7 +286,7 @@ export default function SimilarityView({
       ) : !placed || !basis ? (
         <p className="hint pad">
           {entries.length === 0
-            ? "No playlists yet — import some first."
+            ? "No playlists yet — add some from Setup."
             : `Need at least 3 playlists with ${PCA_MIN_ANALYZED}+ analyzed tracks to draw a map. ` +
               "Open a few playlists so their audio features get analyzed, then come back."}
         </p>

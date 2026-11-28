@@ -267,7 +267,7 @@ export default function StaleView({
           ) : rows.length === 0 ? (
             <p className="hint pad">
               {allSongs.length === 0
-                ? "No songs yet — import your playlists first."
+                ? "No songs yet — add playlists from Setup."
                 : "Nothing matches — every track here has been played within that window."}
             </p>
           ) : (

@@ -1091,7 +1091,7 @@ export default function Library() {
               )}
               {filtered.length === 0 && (
                 <p className="hint pad">
-                  {listBusy ? "Loading…" : "No playlists. Import them in Setup first."}
+                  {listBusy ? "Loading…" : "No playlists yet — add some from Setup."}
                 </p>
               )}
             </>
@@ -1346,7 +1346,7 @@ export default function Library() {
                 </span>
                 <span className="sb-actions">
                   <button className="btn ghost small" onClick={pullRemote} disabled={blocked}>
-                    Import Spotify's version
+                    Refresh from Spotify
                   </button>
                   <button className="link" onClick={draftApi.dismissSync}>
                     Dismiss

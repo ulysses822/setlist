@@ -111,7 +111,7 @@ export default function StatusView({
             {busy
               ? "Reading your playlists…"
               : rows.length === 0
-              ? "No playlists yet — import some first."
+              ? "No playlists yet — add some from Setup."
               : [
                   driftChecked
                     ? `${counts.drifted} drifted`
@@ -155,7 +155,7 @@ export default function StatusView({
         <p className="hint pad">Loading…</p>
       ) : rows.length === 0 ? (
         <p className="hint pad">
-          Nothing to show yet. Import your playlists from <strong>Setup</strong>, then come
+          Nothing to show yet. Add your playlists from <strong>Setup</strong>, then come
           back here for a library-wide overview.
         </p>
       ) : (

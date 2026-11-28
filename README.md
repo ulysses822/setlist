@@ -139,11 +139,11 @@ PC" — **More info → Run anyway**. If that's a dealbreaker, build it yourself
 
 Then, on first run, open the **Setup** tab: paste the Client ID, **Browse…** to a data
 folder (a dedicated private git repo works best — Setup refuses one inside the app's own
-folders, since uninstalling deletes those), then **Connect Spotify** and **Import** your
+folders, since uninstalling deletes those), then **Connect Spotify** and **Refresh** your
 playlists.
 
 ![The Setup tab: a field for the Spotify Client ID, a data-folder picker, the redirect URI
-to register, and buttons to connect and import playlists.](docs/screenshots/setup.png)
+to register, and buttons to connect and refresh playlists.](docs/screenshots/setup.png)
 
 ## Build from source
 
@@ -234,7 +234,7 @@ The app repo holds only code. Everything personal lives in the data folder you c
 Because the data folder is a git repo, Setlist versions it **for you** — no terminal
 needed. The top-bar chip shows when there's something to commit; open it to review every
 change (it writes the commit message: which songs you added, removed, or reordered in each
-playlist), then **Commit** and **Push** to your remote. Imports, curation, and new playlists
+playlist), then **Commit** and **Push** to your remote. Refreshes, curation, and new playlists
 are versioned the same way.
 
 **Where the terminal still comes in.** Setlist covers the day-to-day loop — change, review,
@@ -246,7 +246,7 @@ written from the real diff, so `git log --oneline` in that folder already reads 
 what you changed, not a wall of hashes.
 
 **Editing the files by hand is fine** — it's your repo, and plain JSON is the point. One
-rule, and it only runs one way: don't hand-edit a playlist you're about to import or send.
+rule, and it only runs one way: don't hand-edit a playlist you're about to refresh or send.
 Setlist writes a playlist file from its own copy without reading yours first, so your change
 would go silently. Finish in the app, then edit. Reading is safe either way — the app
 notices a changed file and picks it up. Leave `staged/` and `cache/` to the app; they're
@@ -282,7 +282,7 @@ or inside the install directory — which is the only way an uninstall could rea
 - Your Spotify app runs in **Development Mode**: only users you allowlist in the
   dashboard can authorize it. For a personal tool, that's you — done.
 - Spotify rate-limits aggressively. Setlist paces requests, honors cooldowns with a
-  visible countdown, and imports playlists individually by default so big libraries don't
+  visible countdown, and refreshes playlists individually by default so big libraries don't
   trip the limit.
 - ReccoBeats doesn't cover every release — very new, obscure, or classical tracks may
   show no metrics. Setlist rechecks misses weekly.
