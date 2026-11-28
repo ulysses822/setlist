@@ -162,6 +162,13 @@ Pure logic lives in `.ts` modules with `.test.ts` beside them (`playlistDiff`, `
 
 ## Conventions
 
+- **Spotify and git never share a verb.** Spotify operations are *import* (Spotify → your
+  files) and *send* (your files → Spotify); pull, push, fetch, merge and commit belong to the
+  data repo and nothing else. Setlist's users all have git on their PATH and a repo they built
+  by hand, so a shared word reads as the wrong operation — "pull" in the top bar meant the
+  data repo while "Pull playlists" in Setup meant Spotify. This is a UI-text rule only: the
+  IPC commands are still `pull_playlist` / `push_playlist`, so `api.ts` stays a literal mirror
+  of `lib.rs`.
 - Comments explain **why**, not what. If a line looks odd, the odd part is what the comment is
   for. The codebase is heavily commented in this style; match it.
 - Add a test with a behaviour change. Tests read as sentences in both languages

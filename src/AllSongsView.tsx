@@ -106,7 +106,7 @@ export default function AllSongsView({
         <p className="hint pad">Loading your library…</p>
       ) : songs.length === 0 ? (
         <p className="hint pad">
-          {total === 0 ? "No songs yet — pull your playlists first." : "No songs match that filter."}
+          {total === 0 ? "No songs yet — import your playlists first." : "No songs match that filter."}
         </p>
       ) : (
         <ol className="lib-list">

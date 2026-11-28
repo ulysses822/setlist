@@ -111,12 +111,12 @@ export default function StatusView({
             {busy
               ? "Reading your playlists…"
               : rows.length === 0
-              ? "No playlists yet — pull some first."
+              ? "No playlists yet — import some first."
               : [
                   driftChecked
                     ? `${counts.drifted} drifted`
                     : "drift not checked",
-                  `${counts.unpushed} unpushed`,
+                  `${counts.unpushed} unsent`,
                   `${counts.withIssues} with issues`,
                 ].join(" · ")}
           </p>
@@ -155,7 +155,7 @@ export default function StatusView({
         <p className="hint pad">Loading…</p>
       ) : rows.length === 0 ? (
         <p className="hint pad">
-          Nothing to show yet. Pull your playlists from <strong>Setup</strong>, then come
+          Nothing to show yet. Import your playlists from <strong>Setup</strong>, then come
           back here for a library-wide overview.
         </p>
       ) : (
@@ -186,8 +186,8 @@ export default function StatusView({
                   <td className="num">{r.trackCount}</td>
                   <td>
                     {r.unpushed ? (
-                      <span className="status-badge unpushed" title="Saved edits not pushed to Spotify">
-                        Unpushed
+                      <span className="status-badge unpushed" title="Saved edits not sent to Spotify">
+                        Unsent
                       </span>
                     ) : (
                       <span className="status-badge clean">Clean</span>

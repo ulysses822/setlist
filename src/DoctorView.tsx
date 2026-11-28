@@ -42,7 +42,7 @@ export default function DoctorView({
           <h2>Cleanup</h2>
           <p className="hint">
             Duplicate and unavailable tracks across your library. Fixes are staged so you can
-            review them in each playlist's diff before pushing.
+            review them in each playlist's diff before sending.
           </p>
         </div>
         <button className="btn ghost" onClick={onClose}>

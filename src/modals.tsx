@@ -83,7 +83,7 @@ export function CreatePlaylistModal({
         </label>
         <p className="hint">
           Creates an empty playlist here. It reaches Spotify, as a private playlist, the first
-          time you push it.
+          time you send it.
         </p>
         <div className="modal-actions">
           <button className="btn" onClick={() => onCreate(name, desc)} disabled={!canCreate}>
@@ -123,7 +123,7 @@ export function MergePlaylistModal({
         <h3>Merge a playlist in</h3>
         <p className="hint">
           Its songs are appended here, skipping any already in this playlist. Nothing is
-          removed from the playlist you pick, and nothing reaches Spotify until you push.
+          removed from the playlist you pick, and nothing reaches Spotify until you send.
         </p>
         <input
           className="filter"
@@ -195,8 +195,8 @@ export function DeletePlaylistModal({
         <h3>Delete playlist</h3>
         <p className="confirm-msg">
           This unfollows <b>{target.name}</b> on Spotify (removing it from your library) and
-          deletes it from Setlist, including any unpushed edits. You can only get it back by
-          pulling it again.
+          deletes it from Setlist, including any unsent edits. You can only get it back by
+          importing it again.
         </p>
         <p className="hint">
           Type the playlist name to confirm: <b>{target.name}</b>
@@ -244,7 +244,7 @@ export function ConflictModal({
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <h3>Spotify changed since your last sync</h3>
         <p className="hint">
-          Pushing your version as-is would drop changes made on Spotify. Choose how to
+          Sending your version as-is would drop changes made on Spotify. Choose how to
           resolve:
         </p>
         {conflict.remote_added.length > 0 && (

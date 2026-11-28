@@ -181,7 +181,7 @@ export default function MetricsPanel({
     }
     return (
       <p className="hint pad">
-        No audio features for these tracks yet. Setlist pulls them from ReccoBeats, which
+        No audio features for these tracks yet. Setlist gets them from ReccoBeats, which
         doesn't cover everything — newly released, obscure, and classical or instrumental
         tracks are often missing. Setlist will check again automatically in about a week, in
         case they've since been added.

@@ -389,7 +389,7 @@ export default function Library() {
     edit(removeAtIndices(draft.tracks, selection));
     setStatus({
       kind: "ok",
-      msg: `Removed ${n} song${n === 1 ? "" : "s"} — review the changes and push when you're happy with it`,
+      msg: `Removed ${n} song${n === 1 ? "" : "s"} — review the changes and send when you're happy with it`,
     });
   }
 
@@ -504,7 +504,7 @@ export default function Library() {
               kind: "ok",
               msg: `Normalized "${group.title}" across ${changed} playlist${
                 changed === 1 ? "" : "s"
-              } (staged — open each to review and push)`,
+              } (staged — open each to review and send)`,
             }
       );
       void openDoctor(); // rescan with the fixes applied
@@ -542,7 +542,7 @@ export default function Library() {
           kind: "ok",
           msg: `Added ${added.length} song${added.length === 1 ? "" : "s"} from "${
             source.name
-          }"${skipped > 0 ? `, skipped ${skipped} already here` : ""} — review the changes and push when you're happy with it`,
+          }"${skipped > 0 ? `, skipped ${skipped} already here` : ""} — review the changes and send when you're happy with it`,
         });
       }
       setMergeOpen(false);
@@ -679,7 +679,7 @@ export default function Library() {
       }
       setStatus({
         kind: "ok",
-        msg: `Removed ${songs} from ${lists} (staged — open each to review and push)`,
+        msg: `Removed ${songs} from ${lists} (staged — open each to review and send)`,
         undo: () => restoreStaged(before),
       });
       void openStale(); // rescan so the pruned songs are gone from the list
@@ -705,7 +705,7 @@ export default function Library() {
       }
       setStatus({
         kind: "ok",
-        msg: `Added "${track.title}" to "${target.name}" (staged — push to apply on Spotify)`,
+        msg: `Added "${track.title}" to "${target.name}" (staged — send to apply on Spotify)`,
       });
       void loadList(); // refresh the modified dot
     } catch (e) {
@@ -798,7 +798,7 @@ export default function Library() {
     toggleSort("index");
     setStatus({
       kind: "ok",
-      msg: `Reordered by ${was} — review the changes and push when you're happy with it`,
+      msg: `Reordered by ${was} — review the changes and send when you're happy with it`,
     });
   }
 
@@ -920,11 +920,11 @@ export default function Library() {
             </svg>
           )}
           {p.spotify_id === "" && (
-            <span className="local-badge" title="Not on Spotify yet — push to create it">
+            <span className="local-badge" title="Not on Spotify yet — send to create it">
               new
             </span>
           )}
-          {isModified(p) && <span className="mini-dot" title="Has unpushed edits" />}
+          {isModified(p) && <span className="mini-dot" title="Has unsent edits" />}
           {p.name}
         </span>
         {isPlayingHere && (
@@ -1066,7 +1066,7 @@ export default function Library() {
           <button
             className="btn ghost small new-pl-btn"
             onClick={() => setCreateOpen(true)}
-            title="Create a new playlist (local until you push it to Spotify)"
+            title="Create a new playlist (local until you send it to Spotify)"
           >
             + New playlist
           </button>
@@ -1091,7 +1091,7 @@ export default function Library() {
               )}
               {filtered.length === 0 && (
                 <p className="hint pad">
-                  {listBusy ? "Loading…" : "No playlists. Pull them in Setup first."}
+                  {listBusy ? "Loading…" : "No playlists. Import them in Setup first."}
                 </p>
               )}
             </>
@@ -1147,7 +1147,7 @@ export default function Library() {
           <button
             className={`tool-btn ${overlay?.kind === "status" ? "active" : ""}`}
             onClick={() => void openStatus()}
-            title="Status — unpushed edits, drift from Spotify, and lint issues"
+            title="Status — unsent edits, drift from Spotify, and lint issues"
             aria-label="Status"
           >
             <IcoStatus />
@@ -1221,7 +1221,7 @@ export default function Library() {
                         {(dirty || staged) && (
                           <span
                             className="dot"
-                            title={dirty ? "Unsaved changes" : "Saved, not pushed"}
+                            title={dirty ? "Unsaved changes" : "Saved, not sent"}
                           />
                         )}
                         <button
@@ -1239,8 +1239,8 @@ export default function Library() {
                   <p className="hint">
                     {draft.tracks.length} tracks ·{" "}
                     {fmtTotal(draft.tracks.reduce((a, t) => a + (t.duration_ms ?? 0), 0))}
-                    {dirty ? " · unsaved" : staged ? " · staged (not pushed)" : ""}
-                    {!draft.spotify_id && " · not on Spotify yet — push to create it"}
+                    {dirty ? " · unsaved" : staged ? " · staged (not sent)" : ""}
+                    {!draft.spotify_id && " · not on Spotify yet — send to create it"}
                   </p>
                 </div>
               </div>
@@ -1264,7 +1264,7 @@ export default function Library() {
                   {busy === "save" ? "Saving…" : "Save"}
                 </button>
                 <button className="btn" onClick={push} disabled={busyWriting || blocked}>
-                  {busy === "push" ? "Pushing…" : "Push to Spotify"}
+                  {busy === "push" ? "Sending…" : "Send to Spotify"}
                 </button>
                 <div className="kebab">
                   <button
@@ -1346,7 +1346,7 @@ export default function Library() {
                 </span>
                 <span className="sb-actions">
                   <button className="btn ghost small" onClick={pullRemote} disabled={blocked}>
-                    Pull Spotify's version
+                    Import Spotify's version
                   </button>
                   <button className="link" onClick={draftApi.dismissSync}>
                     Dismiss
@@ -1448,7 +1448,7 @@ export default function Library() {
                 <button
                   className={`diff-toggle ${showDiff ? "active" : ""}`}
                   onClick={() => setShowDiff((v) => !v)}
-                  title="Show planned changes inline before pushing"
+                  title="Show planned changes inline before sending"
                 >
                   {showDiff ? "Showing changes" : "Show changes"}
                 </button>
@@ -1541,7 +1541,7 @@ export default function Library() {
                   disabled={!canApplySort}
                   title={
                     canApplySort
-                      ? "Reorder the playlist to match this view (staged — review and push)"
+                      ? "Reorder the playlist to match this view (staged — review and send)"
                       : "Waiting for the remaining audio features"
                   }
                 >

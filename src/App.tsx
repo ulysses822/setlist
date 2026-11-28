@@ -244,7 +244,7 @@ function App() {
       } else {
         setStatus({
           kind: "ok",
-          msg: `Pulled ${pulled} playlist(s)${
+          msg: `Imported ${pulled} playlist(s)${
             skipped ? `, skipped ${skipped}` : ""
           }`,
         });
@@ -264,7 +264,7 @@ function App() {
       setPlaylists(remote);
       setStatus({
         kind: "ok",
-        msg: `Found ${remote.length} playlist(s) — pull them individually or all at once`,
+        msg: `Found ${remote.length} playlist(s) — import them individually or all at once`,
       });
     } catch (e) {
       setStatus({ kind: "err", msg: String(e) });
@@ -283,7 +283,7 @@ function App() {
       );
       git?.refresh(); // pulled file changes the data repo
       await prefs.loadPrefs(); // the pull may have renamed the file its goal/columns are keyed by
-      setStatus({ kind: "ok", msg: `Pulled "${summary.name}" (${summary.track_count} tracks)` });
+      setStatus({ kind: "ok", msg: `Imported "${summary.name}" (${summary.track_count} tracks)` });
     } catch (e) {
       setStatus({ kind: "err", msg: String(e) });
     } finally {
@@ -491,11 +491,11 @@ function App() {
       </section>
 
       <section className="card">
-        <h2>3 · Pull playlists</h2>
+        <h2>3 · Import playlists</h2>
         <p className="hint">
-          List your playlists and pull them one at a time, or pull everything at once.
-          (Pulling all sends many requests quickly and can hit Spotify's rate limit on large
-          libraries — a single pull is just a few requests.)
+          List your playlists and import them one at a time, or import everything at once.
+          (Importing all sends many requests quickly and can hit Spotify's rate limit on large
+          libraries — a single import is just a few requests.)
         </p>
         <div className="row">
           <button
@@ -510,7 +510,7 @@ function App() {
             onClick={pull}
             disabled={busy !== null || pullingId !== null || blocked || !connected}
           >
-            {busy === "pull" ? "Pulling all…" : "Pull all → JSON"}
+            {busy === "pull" ? "Importing all…" : "Import all → JSON"}
           </button>
         </div>
 
@@ -541,7 +541,7 @@ function App() {
                         onClick={() => pullOne(p)}
                         disabled={busy !== null || pullingId !== null || blocked}
                       >
-                        {pullingId === p.spotify_id ? "Pulling…" : "Pull"}
+                        {pullingId === p.spotify_id ? "Importing…" : "Import"}
                       </button>
                     )}
                   </td>

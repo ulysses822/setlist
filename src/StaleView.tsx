@@ -47,7 +47,7 @@ export default function StaleView({
   onOpenTrack: (file: string, trackId: string) => void;
   /**
    * Remove these songs (bare track ids) from every playlist they appear in. Staged rather
-   * than pushed, so the caller leaves each playlist reviewable.
+   * than sent, so the caller leaves each playlist reviewable.
    */
   onPrune: (trackIds: string[]) => Promise<void>;
 }) {
@@ -267,7 +267,7 @@ export default function StaleView({
           ) : rows.length === 0 ? (
             <p className="hint pad">
               {allSongs.length === 0
-                ? "No songs yet — pull your playlists first."
+                ? "No songs yet — import your playlists first."
                 : "Nothing matches — every track here has been played within that window."}
             </p>
           ) : (

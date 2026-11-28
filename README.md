@@ -19,8 +19,8 @@ against Spotify.](docs/screenshots/library.png)
 
 ### Edit with a safety net
 - Every playlist is a local file — the source of truth. Edits go to a **draft**, are
-  **saved** locally, and only reach Spotify when you **push**.
-- **Show changes** before pushing: an inline diff marks added, removed, and moved tracks
+  **saved** locally, and only reach Spotify when you **send**.
+- **Show changes** before sending: an inline diff marks added, removed, and moved tracks
   against the Spotify mirror.
 - **Drift detection:** if a playlist changed on Spotify since your last sync (another
   device, a collaborator), Setlist tells you on open and refuses to clobber it — you
@@ -91,7 +91,7 @@ The honest map:
   playlist is Spotify's, and your curation work lives or dies with your account and with
   the tool. Setlist's source of truth is a JSON file in a repo you own. Uninstall it and
   you still have your library.
-- **Nothing reaches Spotify unreviewed.** Draft, save, diff, push — with drift detection
+- **Nothing reaches Spotify unreviewed.** Draft, save, diff, send — with drift detection
   that refuses to clobber a playlist something else changed while you weren't looking.
   None of the tools below has a review step; they write as you click.
 - **A Spotify update can't break it.** Setlist talks to the documented Web API through
@@ -139,11 +139,11 @@ PC" — **More info → Run anyway**. If that's a dealbreaker, build it yourself
 
 Then, on first run, open the **Setup** tab: paste the Client ID, **Browse…** to a data
 folder (a dedicated private git repo works best — Setup refuses one inside the app's own
-folders, since uninstalling deletes those), then **Connect Spotify** and **Pull** your
+folders, since uninstalling deletes those), then **Connect Spotify** and **Import** your
 playlists.
 
 ![The Setup tab: a field for the Spotify Client ID, a data-folder picker, the redirect URI
-to register, and buttons to connect and pull playlists.](docs/screenshots/setup.png)
+to register, and buttons to connect and import playlists.](docs/screenshots/setup.png)
 
 ## Build from source
 
@@ -176,7 +176,7 @@ run there:
 ```bash
 npm run build     # tsc (strict) + vite build
 npm test          # both suites, below
-npm run test:web  # vitest — the push diff, the cleanup linter, the feature maths
+npm run test:web  # vitest — the send diff, the cleanup linter, the feature maths
 npm run test:rust # the Rust suite — sync/push planner, staging, renames, git
 npm run lint      # both linters, below
 npm run lint:web  # eslint
@@ -228,13 +228,13 @@ The app repo holds only code. Everything personal lives in the data folder you c
 | `playlists/*.json` | Source of truth — one pretty-printed, diff-friendly file per playlist (content only), named after the playlist and renamed with it |
 | `archived.json`, `pinned.json`, `goals.json` | Curation state — archived/pinned lists and per-playlist mood goals |
 | `history/plays.jsonl` | Append-only listening log |
-| `staged/` | Saved-but-unpushed edits, git-ignored — drafts waiting for a push |
+| `staged/` | Saved-but-unsent edits, git-ignored — drafts waiting to be sent |
 | `cache/` | Derived/rebuildable, git-ignored — audio features, `sync-meta.json` (per-playlist snapshot id, last-synced time, cover URL) and `ui-state.json` (shown columns, outlier method, frozen similarity axes) |
 
 Because the data folder is a git repo, Setlist versions it **for you** — no terminal
 needed. The top-bar chip shows when there's something to commit; open it to review every
 change (it writes the commit message: which songs you added, removed, or reordered in each
-playlist), then **Commit** and **Push** to your remote. Pulls, curation, and new playlists
+playlist), then **Commit** and **Push** to your remote. Imports, curation, and new playlists
 are versioned the same way.
 
 **Where the terminal still comes in.** Setlist covers the day-to-day loop — change, review,
@@ -246,7 +246,7 @@ written from the real diff, so `git log --oneline` in that folder already reads 
 what you changed, not a wall of hashes.
 
 **Editing the files by hand is fine** — it's your repo, and plain JSON is the point. One
-rule, and it only runs one way: don't hand-edit a playlist you're about to pull or push.
+rule, and it only runs one way: don't hand-edit a playlist you're about to import or send.
 Setlist writes a playlist file from its own copy without reading yours first, so your change
 would go silently. Finish in the app, then edit. Reading is safe either way — the app
 notices a changed file and picks it up. Leave `staged/` and `cache/` to the app; they're
@@ -267,7 +267,7 @@ it removes three things:
 | `%LOCALAPPDATA%\com.setlist.app` | The WebView2 profile — which now holds only your light/dark choice |
 | Windows Credential Manager | The Spotify refresh tokens |
 
-**Your data folder is never touched.** Playlists, history, unpushed edits, mood goals and
+**Your data folder is never touched.** Playlists, history, unsent edits, mood goals and
 column layouts are yours and stay exactly where they are, uninstall or not — reinstall, point
 Setlist at the same folder, and it picks up mid-edit. The only thing the checkbox costs you is
 your light/dark preference.
@@ -282,7 +282,7 @@ or inside the install directory — which is the only way an uninstall could rea
 - Your Spotify app runs in **Development Mode**: only users you allowlist in the
   dashboard can authorize it. For a personal tool, that's you — done.
 - Spotify rate-limits aggressively. Setlist paces requests, honors cooldowns with a
-  visible countdown, and pulls playlists individually by default so big libraries don't
+  visible countdown, and imports playlists individually by default so big libraries don't
   trip the limit.
 - ReccoBeats doesn't cover every release — very new, obscure, or classical tracks may
   show no metrics. Setlist rechecks misses weekly.
