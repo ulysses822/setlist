@@ -130,15 +130,39 @@ pub struct PlayLog {
     pub plays: Vec<Play>,
 }
 
+/// What the library holds, in both the forms a play can be recognised by.
+///
+/// Two, because the ids don't line up. Spotify relinks a track to a market-playable
+/// equivalent, and `entry_from` deliberately stores `linked_from` — the id the catalog and
+/// every playlist file reference — while the poller records the uri that actually played,
+/// which is the relinked one. Matching ids alone therefore reports a song as missing from a
+/// library that holds it, which is the opposite of what the badge is for.
+///
+/// The name pair is what rescues the plays already in the log, since nothing can recover a
+/// `linked_from` that was never written down. It is a sound fallback precisely here: a
+/// relink substitutes an equivalent recording, so title and artists are the same on both
+/// sides. Its failure mode is also the safe one — two genuinely different recordings sharing
+/// a title and artist read as in-library, and a badge that stays quiet beats one that lies.
+pub struct Library {
+    /// Bare ids (see `track_id::bare_track_id`).
+    pub ids: std::collections::HashSet<String>,
+    /// (title, artists joined by ", "), both lowercased.
+    pub names: std::collections::HashSet<(String, String)>,
+}
+
+/// Lowercased title and artist list, the form `Library::names` is keyed on.
+pub fn name_key(title: &str, artists: &[String]) -> (String, String) {
+    (
+        title.trim().to_lowercase(),
+        artists.join(", ").trim().to_lowercase(),
+    )
+}
+
 /// Read the whole log as a list of plays, newest first.
 ///
-/// `library_ids` is bare ids (see `track_id::bare_track_id`) of every track in the active
-/// playlists. Passed in rather than read here so this stays a pure function of a directory
-/// and a set — the composition lives in the command, and the test can hand it a set it made.
-pub fn read_log(
-    data_dir: &Path,
-    library_ids: &std::collections::HashSet<String>,
-) -> Result<PlayLog, String> {
+/// `library` is passed in rather than read here so this stays a pure function of a directory
+/// and a set — the composition lives in the command, and the test can hand it one it made.
+pub fn read_log(data_dir: &Path, library: &Library) -> Result<PlayLog, String> {
     let path = data_dir.join("history").join("plays.jsonl");
     let contents = match std::fs::read_to_string(&path) {
         Ok(c) => c,
@@ -172,7 +196,12 @@ pub fn read_log(
         {
             tracked_since = Some(p.played_at.clone());
         }
-        let in_library = library_ids.contains(crate::track_id::bare_track_id(&p.track_id));
+        // An empty title can't be matched on, and must not match every other empty one.
+        let in_library = library
+            .ids
+            .contains(crate::track_id::bare_track_id(&p.track_id))
+            || (!p.title.trim().is_empty()
+                && library.names.contains(&name_key(&p.title, &p.artists)));
         plays.push(Play {
             track_id: p.track_id,
             played_at: p.played_at,
@@ -254,8 +283,18 @@ mod tests {
         .unwrap();
     }
 
-    fn ids(v: &[&str]) -> std::collections::HashSet<String> {
-        v.iter().map(|s| s.to_string()).collect()
+    fn lib(ids: &[&str], names: &[(&str, &str)]) -> Library {
+        Library {
+            ids: ids.iter().map(|s| s.to_string()).collect(),
+            names: names
+                .iter()
+                .map(|(t, a)| (t.to_string(), a.to_string()))
+                .collect(),
+        }
+    }
+
+    fn ids(v: &[&str]) -> Library {
+        lib(v, &[])
     }
 
     #[test]
@@ -299,6 +338,46 @@ mod tests {
         let kept = &log.plays[1];
         assert_eq!((gone.title.as_str(), gone.in_library), ("Gone", false));
         assert_eq!((kept.title.as_str(), kept.in_library), ("Kept", true));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The case that made the badge lie. `entry_from` stores `linked_from` — the catalog id
+    /// the playlist files hold — while the poller writes the uri that actually played, which
+    /// is the market-relinked one. Nothing can recover a `linked_from` the log never wrote,
+    /// so the title and artists it did write are what has to carry the match.
+    #[test]
+    fn a_relinked_play_still_matches_the_library_copy_it_belongs_to() {
+        let dir = unique_dir("logrelink");
+        write_log(
+            &dir,
+            &[
+                r#"{"track_id":"spotify:track:LOCALMARKETVERSION01","played_at":"2026-01-01T10:00:00Z","title":"Soho Nights","artists":["The Puppini Sisters"]}"#,
+            ],
+        );
+        // The library holds the original id, which is nothing like the one that played.
+        let library = lib(
+            &["4cOdK2wGLETKBW3PvgPWqT"],
+            &[("soho nights", "the puppini sisters")],
+        );
+        let log = read_log(&dir, &library).unwrap();
+        assert!(log.plays[0].in_library, "matched on name, not id");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The name fallback must not turn every untitled line into a match for every other one.
+    #[test]
+    fn a_play_with_no_title_is_judged_on_its_id_alone() {
+        let dir = unique_dir("lognotitle");
+        write_log(
+            &dir,
+            &[
+                r#"{"track_id":"spotify:track:unknown","played_at":"2026-01-01T10:00:00Z","title":"","artists":[]}"#,
+            ],
+        );
+        let log = read_log(&dir, &lib(&[], &[("", "")])).unwrap();
+        assert!(!log.plays[0].in_library, "an empty title matches nothing");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

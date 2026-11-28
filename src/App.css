@@ -236,7 +236,7 @@ body {
    timestamps lines up rather than ragging against variable-length titles. */
 .play-row {
   display: grid;
-  grid-template-columns: 110px 2fr 1fr 140px;
+  grid-template-columns: 110px 20px 2fr 1fr 140px;
   align-items: baseline;
   gap: 12px;
   padding: 6px 4px;
@@ -261,6 +261,12 @@ body {
 
 .play-artist {
   color: var(--muted);
+}
+
+/* Same treatment the track list and the stale view give the row that's playing. */
+.play-row.playing .play-title {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 /* Information, not a warning: a play outside the library is the normal case for anything
