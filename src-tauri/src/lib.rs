@@ -225,12 +225,22 @@ fn history_log(app: tauri::AppHandle) -> Result<history::PlayLog, String> {
     let cfg = config::load(&app)?;
     let data_dir = config::resolve_data_dir(&cfg)?;
     let staging = config::staging_dir(&data_dir)?;
-    let library_ids = spotify::read_all_local(data_dir.clone(), staging)?
+    let mut library = history::Library {
+        ids: Default::default(),
+        names: Default::default(),
+    };
+    for track in spotify::read_all_local(data_dir.clone(), staging)?
         .into_iter()
         .flat_map(|p| p.tracks)
-        .map(|t| track_id::bare_track_id(&t.id).to_string())
-        .collect();
-    history::read_log(&data_dir, &library_ids)
+    {
+        library
+            .ids
+            .insert(track_id::bare_track_id(&track.id).to_string());
+        library
+            .names
+            .insert(history::name_key(&track.title, &track.artists));
+    }
+    history::read_log(&data_dir, &library)
 }
 
 /// Open an external page in the default browser. Restricted to the hosts the Setup screen

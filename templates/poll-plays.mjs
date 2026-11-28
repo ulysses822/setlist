@@ -149,7 +149,12 @@ async function fetchRecent(accessToken) {
   const plays = items
     .filter((it) => it?.track?.uri && it?.played_at)
     .map((it) => ({
-      track_id: it.track.uri,
+      // `linked_from` first, matching what the app stores. Spotify relinks a track to a
+      // market-playable equivalent, and a playlist file holds the original catalog id, so
+      // recording the uri that played would log an id nothing in the library references —
+      // which is exactly how the History tab came to mark songs you own as songs you don't.
+      // Absent for anything that wasn't relinked, which is most plays.
+      track_id: it.track.linked_from?.uri ?? it.track.uri,
       played_at: it.played_at,
       title: it.track.name ?? "",
       artists: Array.isArray(it.track.artists) ? it.track.artists.map((a) => a.name) : [],

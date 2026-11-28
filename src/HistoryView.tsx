@@ -13,6 +13,8 @@
 
 import { useMemo, useState } from "react";
 import { api, type PlayLog } from "./api";
+import { isLocalTrack } from "./metricsCalc";
+import { useNowPlaying } from "./player";
 
 /** Rendered rows are capped: the log only grows, and a few years of plays would be tens of
  *  thousands of nodes. The count above the list always reports the true number of matches,
@@ -21,12 +23,39 @@ const MAX_ROWS = 500;
 
 type Scope = "all" | "outside";
 
+/** Survives the tab switch. Changing tabs unmounts this view entirely — App renders a
+ *  different tree per tab — so component state goes with it and the log would have to be
+ *  read again every time you came back. Module scope rather than a provider because nothing
+ *  outside this view wants any of it, and rather than loading on mount because the read
+ *  walks the whole log and every playlist. `prefs.ts` keeps its cache the same way. */
+const remembered: { log: PlayLog | null; filter: string; scope: Scope } = {
+  log: null,
+  filter: "",
+  scope: "all",
+};
+
 export default function HistoryView() {
-  const [log, setLog] = useState<PlayLog | null>(null);
+  const [log, setLogState] = useState<PlayLog | null>(remembered.log);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [filter, setFilter] = useState("");
-  const [scope, setScope] = useState<Scope>("all");
+  const [filter, setFilterState] = useState(remembered.filter);
+  const [scope, setScopeState] = useState<Scope>(remembered.scope);
+
+  // Written through on every change, so what comes back is what you left.
+  const setLog = (v: PlayLog | null) => {
+    remembered.log = v;
+    setLogState(v);
+  };
+  const setFilter = (v: string) => {
+    remembered.filter = v;
+    setFilterState(v);
+  };
+  const setScope = (v: Scope) => {
+    remembered.scope = v;
+    setScopeState(v);
+  };
+
+  const player = useNowPlaying();
 
   async function load() {
     setBusy(true);
@@ -139,7 +168,10 @@ export default function HistoryView() {
             {matches.slice(0, MAX_ROWS).map((p) => (
               // played_at is unique per track from Spotify's own history, so the pair is a
               // stable key even though the same song appears many times.
-              <li key={`${p.track_id}|${p.played_at}`} className="play-row">
+              <li
+                key={`${p.track_id}|${p.played_at}`}
+                className={`play-row ${player?.isPlaying(p.track_id) ? "playing" : ""}`}
+              >
                 <span className="play-when" title={new Date(p.played_at).toLocaleString()}>
                   {new Date(p.played_at).toLocaleString(undefined, {
                     month: "short",
@@ -148,6 +180,14 @@ export default function HistoryView() {
                     minute: "2-digit",
                   })}
                 </span>
+                <button
+                  className="lib-play"
+                  title={isLocalTrack(p.track_id) ? "Local file" : "Play"}
+                  disabled={isLocalTrack(p.track_id)}
+                  onClick={() => player?.play(null, null, [p.track_id])}
+                >
+                  ▶
+                </button>
                 <span className="play-title">{p.title || p.track_id}</span>
                 <span className="play-artist">{p.artists.join(", ")}</span>
                 {!p.in_library && (
