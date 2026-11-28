@@ -123,7 +123,7 @@ to do.
 ## Download
 
 Installers are on the [Releases page](https://github.com/ulysses822/setlist/releases) —
-take the `-setup.exe`, or the `.msi` if you deploy that way. Windows only; see
+take the `-setup.exe`. Windows only; see
 [Platform support](#platform-support) for why.
 
 Two things the installer can't supply:
@@ -163,8 +163,8 @@ npm install
 npm run tauri dev
 ```
 
-`npm run tauri build` produces a standalone `setlist.exe` plus the NSIS and MSI installers
-under `src-tauri/target/release/`. You still need your own Spotify app and the Setup-tab
+`npm run tauri build` produces a standalone `setlist.exe` plus the NSIS installer under
+`src-tauri/target/release/`. You still need your own Spotify app and the Setup-tab
 steps above.
 
 ### Running the checks

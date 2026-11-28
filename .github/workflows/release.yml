@@ -125,18 +125,17 @@ jobs:
 
       # Drafted by default so the notes can be read, and edited, before the release is
       # visible; `publish: true` on the dispatch skips that.
-      - name: Publish the installers
+      - name: Publish the installer
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           PUBLISH: ${{ inputs.publish }}
         run: |
           setup=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe)
-          msi=$(ls src-tauri/target/release/bundle/msi/*.msi)
 
-          # The installers are unsigned, so SmartScreen's warning is the only thing standing
+          # The installer is unsigned, so SmartScreen's warning is the only thing standing
           # between a download and a double-click, and "Run anyway" is advice to ignore it.
-          # Publishing the digests gives anyone who wants to check what they actually got a
+          # Publishing the digest gives anyone who wants to check what they actually got a
           # way to do it, which is the one assurance an unsigned build can offer.
           cat > release-notes.md <<EOF
           Windows only. The installer is unsigned, so SmartScreen will stop you with
@@ -145,10 +144,8 @@ jobs:
           You also need \`git\` on your PATH and your own Spotify Client ID. The
           [README](https://github.com/${{ github.repository }}#download) walks through both.
 
-          | File | SHA-256 |
-          |---|---|
-          | \`$(basename "$setup")\` | \`$(sha256sum "$setup" | cut -d ' ' -f 1)\` |
-          | \`$(basename "$msi")\` | \`$(sha256sum "$msi" | cut -d ' ' -f 1)\` |
+          \`$(basename "$setup")\`
+          SHA-256 \`$(sha256sum "$setup" | cut -d ' ' -f 1)\`
           EOF
 
           draft=--draft
@@ -156,7 +153,7 @@ jobs:
             draft=
           fi
 
-          gh release create "$TAG" "$setup" "$msi" \
+          gh release create "$TAG" "$setup" \
             $draft \
             --target "$GITHUB_SHA" \
             --title "Setlist $TAG" \
