@@ -20,10 +20,10 @@ The frontend half type-checks and builds anywhere. On macOS or Linux, `npm run b
 The `compile_error!` is unconditional, so there is no flag or feature that gets the Rust half
 building here. Plan around it rather than fighting it:
 
-- **Verifiable in-session:** `npm run build`, `npm run test:web` (109 tests), `npm run lint:web`,
+- **Verifiable in-session:** `npm run build`, `npm run test:web`, `npm run lint:web`,
   and `node --check` on `scripts/get-refresh-token.mjs` / `templates/poll-plays.mjs`. That covers
   the whole frontend, the two standalone Node scripts, docs and workflows.
-- **Not verifiable in-session:** `cargo build`, `clippy`, `cargo fmt --check`, all 74 Rust tests,
+- **Not verifiable in-session:** `cargo build`, `clippy`, `cargo fmt --check`, the Rust suite,
   and running the app (needs Windows, WebView2, the credential manager, and real Spotify
   credentials).
 
