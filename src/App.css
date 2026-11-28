@@ -201,6 +201,80 @@ body {
   user-select: text;
 }
 
+/* The log is a long list rather than a short form, so this tab gets the full width the
+   Setup column deliberately doesn't. */
+.history-app {
+  max-width: 1100px;
+}
+
+/* Not the Setup hero. This tab is a long list, and the wordmark treatment there would push
+   the first row of it under the fold — Library, the other list-shaped tab, has no hero at
+   all for the same reason. */
+.history-head {
+  margin-bottom: 18px;
+}
+
+.history-head h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.history-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.play-log {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+/* Time first because the log is read chronologically, and fixed-width so the column of
+   timestamps lines up rather than ragging against variable-length titles. */
+.play-row {
+  display: grid;
+  grid-template-columns: 110px 2fr 1fr 140px;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--border-soft);
+  font-size: 14px;
+}
+
+.play-when {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.play-title,
+.play-artist {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.play-artist {
+  color: var(--muted);
+}
+
+/* Information, not a warning: a play outside the library is the normal case for anything
+   you heard on someone else's playlist, and the tab exists to show those. */
+.play-outside {
+  color: var(--info);
+  background: rgb(var(--info-rgb) / 0.12);
+  border: 1px solid rgb(var(--info-rgb) / 0.3);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .card {
   background: var(--panel);
   border: 1px solid var(--border);

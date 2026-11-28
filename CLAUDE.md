@@ -144,7 +144,9 @@ config and delegates. `spotify.rs` holds shared state, the rate-limiter (pacing,
 cooldowns the UI counts down) and the HTTP client; `spotify/` splits into `auth` (PKCE, keychain,
 loopback), `store` (reading/writing playlist files), `sync` (push planning), `player`.
 `git.rs` shells out to the real `git` binary; `metrics.rs` fetches and caches ReccoBeats audio
-features; `history.rs` reads the play log.
+features; `history.rs` reads the play log two ways — `read_plays` aggregates per track for the
+stale view and drops the log's title/artists, `read_log` keeps them because the History tab's
+whole subject is plays whose track no playlist holds.
 
 ### Frontend (`src/`)
 
@@ -156,6 +158,10 @@ concerns: `usePlaylistDraft` (the edit lifecycle above), `usePlaylistLibrary` (t
 cleanup checks). `prefs.ts` keeps
 curation and view state in the data folder rather than localStorage, cached in memory so reads
 can stay synchronous during render.
+
+Three top-level tabs: Setup and Library, plus `HistoryView` for the listening log. History
+is a tab rather than part of Library because the two hold different sets — the log keeps
+plays of songs you removed, heard elsewhere, or never had.
 
 Pure logic lives in `.ts` modules with `.test.ts` beside them (`playlistDiff`, `lint`,
 `metricsCalc`, `format`) — node environment, no jsdom. Rendering is untested.
